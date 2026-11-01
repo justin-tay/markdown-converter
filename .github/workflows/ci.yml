@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-latest is Apple silicon; macos-15-intel covers Intel Macs (StR-070).
+        os: [windows-latest, macos-latest, macos-15-intel, ubuntu-latest]
+        python: ["3.12", "3.14"]
+        exclude:
+          # onnxruntime has no Intel-Mac builds for Python 3.14 (requirements-macos-x64.lock).
+          - os: macos-15-intel
+            python: "3.14"
+        include:
+          - os: macos-15-intel
+            python: "3.13"
+    runs-on: ${{ matrix.os }}
+    env:
+      LOCK_FILE: ${{ matrix.os == 'macos-15-intel' && 'requirements-macos-x64.lock' || 'requirements.lock' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install pinned dependencies
+        run: python -m pip install -r ${{ env.LOCK_FILE }} -r requirements-dev.txt
+      - name: Install the converter
+        run: python -m pip install --no-deps -e .
+      - name: Test (the launcher tests also exercise first-run Setup)
+        run: python -m pytest
+      - name: Check dependency licences
+        run: python tools/check_licences.py ${{ env.LOCK_FILE }}
+
+  offline-bundle:
+    # Proves each bundle is complete: build it, then install with no package index.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, platform: windows-x64, python: "3.14" }
+          - { os: macos-latest, platform: macos-arm64, python: "3.14" }
+          - { os: macos-15-intel, platform: macos-x64, python: "3.13" }
+          - { os: ubuntu-latest, platform: linux-x86_64, python: "3.12" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build the bundle
+        run: python tools/build_offline_bundle.py ${{ matrix.platform }} --python ${{ matrix.python }}
+      - name: Install from the bundle only
+        shell: bash
+        run: |
+          lock=requirements.lock
+          [ "${{ matrix.platform }}" = macos-x64 ] && lock=requirements-macos-x64.lock
+          python -m venv bundle-venv
+          venv_python=bundle-venv/bin/python
+          [ -x "$venv_python" ] || venv_python=bundle-venv/Scripts/python.exe
+          "$venv_python" -m pip install --no-index --find-links "offline-bundle/${{ matrix.platform }}" -r "$lock"

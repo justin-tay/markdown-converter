@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "markdown-converter"
+version = "0.1.0"
+description = "Offline converter from office documents to Markdown with images and charts extracted"
+requires-python = ">=3.12,<3.15"
+# Exact versions live in requirements.lock; Setup installs from there.
+dependencies = ["markitdown[pdf,docx,pptx,xlsx,xls,outlook]==0.1.9", "pypdf==6.21.4"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["launcher: runs the launcher scripts as subprocesses (first run performs Setup)"]
+filterwarnings = [
+    # markitdown reads .xls through pandas' xlrd engine, which pandas now marks deprecated.
+    "ignore:The xlrd engine is deprecated:FutureWarning",
+    "ignore:The xlrd engine is deprecated:DeprecationWarning",
+]
