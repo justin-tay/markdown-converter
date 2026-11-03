@@ -12,6 +12,10 @@ Word asks before converting each PDF unless that notice is turned off. In
 Word: File > Options > General, or set the DWORD
 HKCU\Software\Microsoft\Office\16.0\Word\Options\DisableConvertPdfWarning to 1.
 
+Word runs hidden, so any question it asks stops the script without showing.
+After Word was closed abruptly, it asks on its next start whether to open in
+safe mode: start Word once by hand and answer No before running this script.
+
 .EXAMPLE
 powershell -ExecutionPolicy Bypass -File tools\pdf_to_docx_with_word.ps1 "C:\Reports\plan.pdf"
 
