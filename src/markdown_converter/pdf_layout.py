@@ -28,22 +28,45 @@ _MARGIN_TOLERANCE = 6
 # Text this much larger than body text counts as larger.
 _LARGER = 0.5
 
+# Diagrams: drawn shapes outside bordered tables, and smaller than this share of the page, are
+# grouped when within this many points of each other...
+_MAX_SHAPE_SHARE = 0.5
+_SHAPE_GAP = 12
+# ...and a group is a diagram with at least this many shapes, a curve or a filled shape,
+# at least one shape for every this many words of text inside it (shaded table rows and
+# coloured text boxes are mostly text), and at least this size in points (curves are
+# measured by their end points, so this is generous).
+_DIAGRAM_MIN_SHAPES = 10
+_DIAGRAM_MAX_WORDS_PER_SHAPE = 2
+_DIAGRAM_MIN_WIDTH, _DIAGRAM_MIN_HEIGHT = 72, 36
+# A Figure Snapshot of a diagram takes in this many points around its shapes, for labels at its edges.
+_DIAGRAM_MARGIN = 4
 
-def blocks(document) -> list[Block]:
-    """The blocks of an untagged PDF, page by page, top to bottom."""
+
+def blocks(document, figures) -> list[Block]:
+    """The blocks of an untagged PDF, page by page, top to bottom.
+
+    Diagrams become Figure Snapshots through `figures` (`snapshot(page, bbox)` renders
+    an area and returns its link; `reached(page, image name)` records an image the
+    snapshot already shows), and the text inside them is left out.
+    """
     pages = []
     for page in document.pages:
         # A tighter tolerance than pdfplumber's keeps closely set words apart, as in tightly set headings.
         lines = [line for line in page.extract_text_lines(strip=True, return_chars=True, x_tolerance=1.5)
                  if line["text"]]
         tables = [table for table in page.find_tables() if _table_rows(table)]
-        pages.append((page, lines, tables))
+        diagrams = _diagrams(page, tables, lines)
+        lines = [line for line in lines if not any(_middle_inside(line, area) for area in diagrams)]
+        pages.append((page, lines, tables, diagrams))
     furniture = _furniture(pages)
     body_size, margin = _body_style(pages)
     placed = []  # (page number, markdown, heading text size or None)
-    for page, lines, tables in pages:
+    for page, lines, tables, diagrams in pages:
         content = [line for line in lines if id(line) not in furniture and not _in_table(line, tables)]
         on_page = [(table.bbox[1], _table_markdown(_table_rows(table)), None) for table in tables]
+        on_page += [(area[1], f"![]({link})", None) for area in diagrams
+                    if (link := _diagram_snapshot(page, area, figures))]
         on_page += _text_blocks(content, body_size, margin)
         placed += [(page.page_number, markdown, size) for _, markdown, size in sorted(on_page, key=lambda b: b[0])]
     # Heading levels follow text size: the largest heading text used is `#`, the next `##`, and so on.
@@ -55,7 +78,7 @@ def blocks(document) -> list[Block]:
 def _furniture(pages) -> set[int]:
     """The ids of every line that is Page Furniture."""
     candidates = collections.defaultdict(list)  # digit-free text -> (page number, top, line)
-    for page, lines, tables in pages:
+    for page, lines, tables, _ in pages:
         band = page.height * _FURNITURE_BAND
         for line in lines:
             if (line["top"] < band or line["bottom"] > page.height - band) and not _in_table(line, tables):
@@ -72,7 +95,7 @@ def _furniture(pages) -> set[int]:
 def _body_style(pages) -> tuple[float, float]:
     """The most common text size and left edge: body text's."""
     sizes, edges = collections.Counter(), collections.Counter()
-    for _, lines, _ in pages:
+    for _, lines, _, _ in pages:
         for line in lines:
             sizes[round(line["chars"][0]["size"], 1)] += len(line["chars"])
             edges[round(line["x0"])] += 1
@@ -131,6 +154,68 @@ def _is_bold(chars: list[dict]) -> bool:
 def _gap(previous: dict, line: dict) -> float:
     """The space between two lines, in line heights."""
     return (line["top"] - previous["bottom"]) / max(previous["bottom"] - previous["top"], 1)
+
+
+def _diagrams(page, tables, lines: list[dict]) -> list[tuple[float, float, float, float]]:
+    """The areas (x0, top, x1, bottom) of the page's diagrams: dense groups of drawn shapes outside its tables."""
+    page_area = page.width * page.height
+    shapes = [shape for kind in ("rect", "line", "curve") for shape in page.objects.get(kind, [])
+              if (shape["x1"] - shape["x0"]) * (shape["bottom"] - shape["top"]) < page_area * _MAX_SHAPE_SHARE
+              and not any(_box_inside(shape, table.bbox) for table in tables)]
+    areas = []
+    for group in _groups(shapes):
+        x0, top, x1, bottom = (min(s["x0"] for s in group), min(s["top"] for s in group),
+                               max(s["x1"] for s in group), max(s["bottom"] for s in group))
+        words = sum(len(line["text"].split()) for line in lines if _middle_inside(line, (x0, top, x1, bottom)))
+        if (len(group) >= _DIAGRAM_MIN_SHAPES and x1 - x0 >= _DIAGRAM_MIN_WIDTH
+                and bottom - top >= _DIAGRAM_MIN_HEIGHT
+                and words <= len(group) * _DIAGRAM_MAX_WORDS_PER_SHAPE
+                and any(s["object_type"] == "curve" or s.get("fill") for s in group)):
+            areas.append((x0 - _DIAGRAM_MARGIN, top - _DIAGRAM_MARGIN, x1 + _DIAGRAM_MARGIN, bottom + _DIAGRAM_MARGIN))
+    return areas
+
+
+def _groups(shapes: list[dict]) -> list[list[dict]]:
+    """Shapes grouped with every shape within `_SHAPE_GAP` points of another in the group."""
+    shapes = sorted(shapes, key=lambda s: s["x0"])
+    parent = list(range(len(shapes)))
+
+    def root(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i, a in enumerate(shapes):
+        for j in range(i + 1, len(shapes)):
+            b = shapes[j]
+            if b["x0"] > a["x1"] + _SHAPE_GAP:
+                break  # sorted by left edge, so no later shape is near `a` either
+            if b["top"] <= a["bottom"] + _SHAPE_GAP and a["top"] <= b["bottom"] + _SHAPE_GAP:
+                parent[root(j)] = root(i)
+    groups = collections.defaultdict(list)
+    for i, shape in enumerate(shapes):
+        groups[root(i)].append(shape)
+    return list(groups.values())
+
+
+def _diagram_snapshot(page, area: tuple[float, float, float, float], figures) -> str | None:
+    """Render a diagram's area as a Figure Snapshot; images inside it are not linked again."""
+    for image in page.images:
+        if _box_inside(image, area):
+            figures.reached(page.page_number, image["name"])
+    x0, top, x1, bottom = area
+    return figures.snapshot(page.page_number, (x0, page.height - bottom, x1, page.height - top))
+
+
+def _box_inside(item: dict, box: tuple[float, float, float, float]) -> bool:
+    x0, top, x1, bottom = box
+    return x0 - 2 <= item["x0"] and item["x1"] <= x1 + 2 and top - 2 <= item["top"] and item["bottom"] <= bottom + 2
+
+
+def _middle_inside(line: dict, box: tuple[float, float, float, float]) -> bool:
+    x0, top, x1, bottom = box
+    return x0 <= (line["x0"] + line["x1"]) / 2 <= x1 and top <= (line["top"] + line["bottom"]) / 2 <= bottom
 
 
 def _in_table(line: dict, tables) -> bool:

@@ -1193,6 +1193,36 @@ def build_untagged_pdf(folder: Path) -> Path:
     line(286, 506, "Cost", "Helvetica-Bold")
     line(78, 486, "Laptop")
     line(256, 486, "900")
+    # A diagram: two filled boxes joined by a curved arrow, with steps between them and labels inside.
+    pdf.setFillColorRGB(0.2, 0.4, 0.8)
+    pdf.rect(72, 330, 100, 50, fill=1, stroke=0)
+    pdf.rect(300, 330, 100, 50, fill=1, stroke=0)
+    for step in range(6):
+        pdf.rect(180 + step * 20, 350, 8, 8, fill=1, stroke=0)
+    arrow = pdf.beginPath()
+    arrow.moveTo(172, 380)
+    arrow.curveTo(220, 430, 260, 430, 300, 380)
+    pdf.drawPath(arrow, stroke=1, fill=0)
+    head = pdf.beginPath()
+    head.moveTo(300, 380)
+    head.lineTo(290, 392)
+    head.lineTo(286, 380)
+    head.close()
+    pdf.drawPath(head, stroke=0, fill=1)
+    pdf.setFillColorRGB(1, 1, 1)
+    line(90, 350, "Draft site")
+    line(320, 350, "Live site")
+    pdf.setFillColorRGB(0, 0, 0)
+    line(72, 300, "The release process is shown above.")
+    # Not a diagram: a borderless table whose rows are told apart by shaded bands, and an underline.
+    for row in range(12):
+        shade = 0.85 if row % 2 else 0.93
+        pdf.setFillColorRGB(shade, shade, shade)
+        pdf.rect(72, 262 - row * 14, 300, 14, fill=1, stroke=0)
+        pdf.setFillColorRGB(0, 0, 0)
+        line(78, 266 - row * 14, f"Week {row + 1} planning meeting")
+        line(300, 266 - row * 14, "Room B")
+    pdf.line(72, 80, 200, 80)
     pdf.showPage()
     for number, (serial, activity) in enumerate([("1", "Draft"), ("2", "Review"),
                                                  ("3", "Publish")], start=2):

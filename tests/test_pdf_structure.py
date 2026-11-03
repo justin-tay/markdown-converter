@@ -136,6 +136,27 @@ def test_untagged_bordered_table_is_a_markdown_table_after_its_page_marker(run, 
     assert "## Page" not in text
 
 
+def test_untagged_diagram_becomes_one_figure_snapshot_in_place_of_its_labels(run, tmp_path):
+    text = _convert_untagged(run, tmp_path)
+
+    assert ("| Laptop | 900 |\n\n![](project-plan_assets/p001-fig01.png)\n\n"
+            "The release process is shown above.") in text
+    assert "Draft site" not in text and "Live site" not in text
+    from PIL import Image
+
+    with Image.open(tmp_path / "project-plan_assets" / "p001-fig01.png") as image:
+        width, height = image.size
+    # The diagram spans about 328 x 62 pt; at 150 DPI that is roughly 683 x 129 px, plus a little margin.
+    assert 660 <= width <= 720 and 120 <= height <= 170
+
+
+def test_untagged_shaded_rows_and_underlines_are_not_mistaken_for_diagrams(run, tmp_path):
+    text = _convert_untagged(run, tmp_path)
+
+    assert "Week 1 planning meeting Room B" in text and "Week 12 planning meeting Room B" in text
+    assert not (tmp_path / "project-plan_assets" / "p001-fig02.png").exists()
+
+
 def test_untagged_table_columns_split_by_extra_borders_are_merged(run, tmp_path):
     text = _convert_untagged(run, tmp_path)
 

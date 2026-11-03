@@ -38,7 +38,7 @@ def extract(source: Path, markdown: str, store: AssetStore, options: ConversionO
             else:
                 store.notes.append("structure read from its layout " + (
                     "(no tags)" if structure is None else f"(tags reach only {coverage:.0%} of its text)"))
-                blocks = pdf_layout.blocks(document)
+                blocks = pdf_layout.blocks(document, figures)
     finally:
         figures.close()
     if not any(item["text"].strip() for items in objects.values() for item in items
