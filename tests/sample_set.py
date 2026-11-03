@@ -1209,6 +1209,9 @@ def build_untagged_pdf(folder: Path) -> Path:
     line(286, 506, "Cost", "Helvetica-Bold")
     line(78, 486, "Laptop")
     line(256, 486, "900")
+    # An invisible white background box behind the diagram and the paragraph below it, as Office exports paint.
+    pdf.setFillColorRGB(1, 1, 1)
+    pdf.rect(40, 290, 420, 130, fill=1, stroke=0)
     # A diagram: two filled boxes joined by a curved arrow, with steps between them and labels inside.
     pdf.setFillColorRGB(0.2, 0.4, 0.8)
     pdf.rect(72, 330, 100, 50, fill=1, stroke=0)
@@ -1234,8 +1237,9 @@ def build_untagged_pdf(folder: Path) -> Path:
     pdf.setFillColorRGB(0.2, 0.4, 0.8)
     pdf.rect(418, 330, 20, 50, fill=1, stroke=0)
     pdf.setFillColorRGB(0, 0, 0)
-    line(150, 397, "Each release passes review")
-    line(150, 386, "before it goes live.")
+    line(150, 408, "Each release passes review")
+    line(150, 397, "before it goes live.")
+    pdf.rect(150, 395, 96, 0.6, fill=1, stroke=0)  # the caption's underline, drawn as a thin box
     line(72, 300, "The release process is shown above.")
     # Not a diagram: a borderless table whose rows are told apart by shaded bands, and an underline.
     for row in range(12):

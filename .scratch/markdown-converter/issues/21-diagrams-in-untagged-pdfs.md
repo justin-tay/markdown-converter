@@ -10,7 +10,8 @@
 - [x] The area takes in labels that stick out past the shapes (any line of text overlapping them) and the rest of a caption (lines within the area's width, less than a paragraph gap from a line already taken), plus a small margin so strokes and tall letters aren't clipped; text merely inside the widened area, such as a section title beside a caption, stays in the text
 - [x] A group is a diagram when it has at least 10 shapes, includes a curve or a filled shape, has no more than two words of text inside it per shape, and is at least 1 inch wide and half an inch tall; a lone rule, an underline, a box around a few words or a table told apart by shaded rows is not
 - [x] Each diagram becomes one 150 DPI Figure Snapshot of its area (`pNNN-figNN.png`), placed where its top sits among the page's blocks (StR-046, StR-022)
-- [x] A diagram's labels and caption are left out of the text, since the picture shows them; Embedded Images inside it are not linked separately
+- [x] Shapes that draw nothing visible (white fill, no outline: the background boxes Office exports paint) and underlines (a thin rule just under a line of text) are not part of any diagram
+- [x] Only text whose centre lies inside the diagram's shapes leaves the Markdown, since the picture shows it; labels sticking out and captions are pictured but stay in the text, so widening the picture never loses text. Embedded Images inside the area are not linked separately
 - [x] Figures smaller than `--min-image-size` are skipped (StR-024)
 - [x] S-18 gains a diagram (filled boxes joined by a curved arrow, with labels), a borderless table with shaded rows and an underline; only the diagram becomes a picture, and its bordered tables stay Markdown tables
 

@@ -151,9 +151,11 @@ def test_untagged_bordered_table_is_a_markdown_table_after_its_page_marker(run, 
 def test_untagged_diagram_becomes_one_figure_snapshot_in_place_of_its_labels(run, tmp_path):
     text = _convert_untagged(run, tmp_path)
 
-    assert ("| Laptop | 900 |\n\n![](project-plan_assets/p001-fig01.png)\n\n"
+    # Labels inside the shapes leave the text; the caption is pictured but stays in the text too,
+    # so nothing is lost. The invisible background box doesn't pull in the paragraph below.
+    assert ("![](project-plan_assets/p001-fig01.png)\n\nEach release passes review\nbefore it goes live.\n\n"
             "The release process is shown above.") in text
-    for label in ("Draft site", "Live site", "Owner", "Each release passes review", "before it goes live"):
+    for label in ("Draft site", "Live site", "Owner"):
         assert label not in text
     from PIL import Image
 
@@ -161,9 +163,9 @@ def test_untagged_diagram_becomes_one_figure_snapshot_in_place_of_its_labels(run
         width, height = image.size
     # Across: from the label sticking out on the left (30 pt) to the shape 18 pt beyond the
     # right-hand box (438 pt), about 408 pt or 850 px at 150 DPI, plus margins. Down: the
-    # caption's top line (about 406 pt from the page bottom) to the boxes' foot (330 pt),
-    # about 76 pt or 158 px, plus margins. Without the caption it would be under 140 px.
-    assert 850 <= width <= 900 and 160 <= height <= 185
+    # caption's top line (about 416 pt from the page bottom) to the boxes' foot (330 pt),
+    # about 86 pt or 180 px, plus margins. Without the caption it would be under 160 px.
+    assert 850 <= width <= 900 and 180 <= height <= 215
 
 
 def test_untagged_shaded_rows_and_underlines_are_not_mistaken_for_diagrams(run, tmp_path):

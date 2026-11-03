@@ -32,6 +32,8 @@ _LARGER = 0.5
 # grouped when within this many points of each other...
 _MAX_SHAPE_SHARE = 0.5
 _SHAPE_GAP = 24
+# A rule no thicker than this just under a line of text is its underline, not part of a drawing.
+_UNDERLINE_THICKNESS = 2
 # ...and a group is a diagram with at least this many shapes, a curve or a filled shape,
 # at least one shape for every this many words of text inside it (shaded table rows and
 # coloured text boxes are mostly text), and at least this size in points (curves are
@@ -163,17 +165,23 @@ def _gap(previous: dict, line: dict) -> float:
 
 def _diagrams(page, tables, lines: list[dict]) -> list[tuple[tuple[float, float, float, float], list[dict]]]:
     """The page's diagrams, dense groups of drawn shapes outside its tables: each one's area
-    (x0, top, x1, bottom) and the lines of text that are its labels and caption."""
+    (x0, top, x1, bottom), and the lines of text inside its shapes, which are its labels.
+
+    The area also takes in labels sticking out and captions, but those lines stay in the
+    text as well, so widening the picture never loses text.
+    """
     page_area = page.width * page.height
     shapes = [shape for kind in ("rect", "line", "curve") for shape in page.objects.get(kind, [])
               if (shape["x1"] - shape["x0"]) * (shape["bottom"] - shape["top"]) < page_area * _MAX_SHAPE_SHARE
+              and _visible(shape) and not _underlines(shape, lines)
               and not any(_box_inside(shape, table.bbox) for table in tables)]
     areas = []
     for group in _groups(shapes):
         x0, top, x1, bottom = (min(s["x0"] for s in group), min(s["top"] for s in group),
                                max(s["x1"] for s in group), max(s["bottom"] for s in group))
-        (x0, top, x1, bottom), labels = _with_labels((x0 - _DIAGRAM_MARGIN, top - _DIAGRAM_MARGIN,
-                                                      x1 + _DIAGRAM_MARGIN, bottom + _DIAGRAM_MARGIN), lines)
+        labels = [line for line in lines if _middle_inside(line, (x0, top, x1, bottom))]
+        shapes_area = (x0 - _DIAGRAM_MARGIN, top - _DIAGRAM_MARGIN, x1 + _DIAGRAM_MARGIN, bottom + _DIAGRAM_MARGIN)
+        x0, top, x1, bottom = _with_labels(shapes_area, lines)
         words = sum(len(line["text"].split()) for line in labels)
         if (len(group) >= _DIAGRAM_MIN_SHAPES and x1 - x0 >= _DIAGRAM_MIN_WIDTH
                 and bottom - top >= _DIAGRAM_MIN_HEIGHT
@@ -185,8 +193,8 @@ def _diagrams(page, tables, lines: list[dict]) -> list[tuple[tuple[float, float,
     return areas
 
 
-def _with_labels(box: tuple[float, float, float, float], lines: list[dict]):
-    """A diagram's area widened to take in its labels and captions, and those lines.
+def _with_labels(box: tuple[float, float, float, float], lines: list[dict]) -> tuple[float, float, float, float]:
+    """A diagram's area widened to take in its labels and captions.
 
     Lines overlapping the area are labels, often sticking out past the shapes they
     name. A line within the area's width less than a paragraph gap above or below
@@ -204,7 +212,37 @@ def _with_labels(box: tuple[float, float, float, float], lines: list[dict]):
                 taken.append(line)
                 box = _around(box, [line])
                 grew = True
-    return box, taken
+    return box
+
+
+def _underlines(shape: dict, lines: list[dict]) -> bool:
+    """Whether a shape is a thin rule just under a line of text, within its width: an underline, not drawing."""
+    if shape["bottom"] - shape["top"] > _UNDERLINE_THICKNESS:
+        return False
+    return any(line["x0"] - 2 <= shape["x0"] and shape["x1"] <= line["x1"] + 2
+               and line["bottom"] - 4 <= shape["top"] <= line["bottom"] + 3 for line in lines)
+
+
+def _visible(shape: dict) -> bool:
+    """Whether a shape shows on the page: outlined, or filled with something other than white.
+
+    Office exports often paint white, unoutlined boxes behind a page's content; they draw nothing.
+    """
+    if shape.get("stroke"):
+        return True
+    if not shape.get("fill"):
+        return False
+    colour = shape.get("non_stroking_color")
+    components = list(colour) if isinstance(colour, (list, tuple)) else [colour]
+    if not components or any(not isinstance(c, (int, float)) for c in components):
+        return True  # a pattern or named colour: assume it shows
+    white = [0, 0, 0, 0] if len(components) == 4 else [1] * len(components)  # CMYK white is no ink
+    return components != white
+
+
+def _middle_inside(line: dict, box: tuple[float, float, float, float]) -> bool:
+    x0, top, x1, bottom = box
+    return x0 <= (line["x0"] + line["x1"]) / 2 <= x1 and top <= (line["top"] + line["bottom"]) / 2 <= bottom
 
 
 def _continues(line: dict, other: dict) -> bool:
