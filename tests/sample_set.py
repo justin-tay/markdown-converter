@@ -1077,9 +1077,13 @@ def build_tagged_pdf(folder: Path) -> Path:
 
     # Page 1: title, contents, a numbered list and a paragraph with links.
     title = e("H1", t(1, 72, 760, "Club handbook", 20, True))
+    # The last two entries' titles are tagged only as a paragraph and a one-cell table header row.
     contents = e("TOC",
-                 e("TOCI", t(1, 72, 720, "Joining .................................. 1")),
-                 e("TOCI", t(1, 72, 704, "Facilities .............................. 2")))
+                 e("TOCI", t(1, 72, 724, "Joining .................................. 1")),
+                 e("TOCI", t(1, 72, 712, "Facilities .............................. 2")),
+                 e("TOCI", t(1, 72, 700, "Questions ............................... 3")),
+                 e("TOCI", t(1, 90, 688, "Room bookings ....................... 3")),
+                 e("TOCI", t(1, 90, 676, "Cancellations ........................ 3")))
     leave = e("H2", t(1, 72, 670, "Joining", 14, True))
     steps = e("L",
               e("LI", e("Lbl", t(1, 72, 645, "1.")), e("LBody", t(1, 90, 645, "Fill in the form at the desk."))),
@@ -1096,6 +1100,8 @@ def build_tagged_pdf(folder: Path) -> Path:
               e("Link", t(1, x[3], 600, runs[3]), pdf.link(1, (x[3], 597, x[4], 611), to_page=2)),
               t(1, x[4], 600, runs[4]))
     empty_heading = e("H2", t(1, 72, 580, " "))
+    # A bold label that happens to match a contents title belonging much later in the document.
+    early_label = e("P", t(1, 72, 560, "Room bookings", bold=True))
 
     # Page 2: benefits list, a vector chart, and a table that runs onto page 3.
     benefits = e("H2", t(2, 72, 760, "Facilities", 14, True))
@@ -1126,8 +1132,18 @@ def build_tagged_pdf(folder: Path) -> Path:
     diagram = e("Figure", pdf.drawing(3, ["0 0 0 RG 72 200 80 40 re S", "300 200 80 40 re S",
                                           "152 220 m 200 300 260 300 300 220 c S"]), alt="Booking flow")
     label = e("P", t(3, 110, 215, "Member sends the booking to the desk"))
-    return pdf.save(folder / "handbook.pdf", title, contents, leave, steps, forms, empty_heading, benefits, cover,
-                    chart, table, deadline, logo, box, annotated, tick, diagram, label)
+    # Section titles the author styled but didn't tag as headings, and a bold label that isn't a title.
+    questions = e("P", t(3, 72, 170, "Questions", 14, True))
+    tip = e("P", t(3, 72, 155, "Tip", bold=True))
+    bookings = e("Table",
+                 e("TR", e("TH", t(3, 72, 135, "Room bookings", bold=True))),
+                 e("TR", e("TH", t(3, 72, 120, "Day", bold=True)), e("TH", t(3, 200, 120, "Slots", bold=True))),
+                 e("TR", e("TD", t(3, 72, 105, "Monday")), e("TD", t(3, 200, 105, "4"))),
+                 # A full-width row whose cell opens with the next section's title.
+                 e("TR", e("TD", e("P", t(3, 72, 90, "Cancellations", bold=True)),
+                           e("P", t(3, 72, 78, "Cancel a day ahead.")))))
+    return pdf.save(folder / "handbook.pdf", title, contents, leave, steps, forms, empty_heading, early_label, benefits, cover,
+                    chart, table, deadline, logo, box, annotated, tick, diagram, label, questions, tip, bookings)
 
 
 def build_tagged_pdf_out_of_page_order(folder: Path) -> Path:

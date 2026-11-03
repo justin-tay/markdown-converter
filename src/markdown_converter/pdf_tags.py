@@ -18,6 +18,11 @@ _LIST_LIKE_START = re.compile(r"^(\d{1,9})([.)])(?=\s|$)")
 _HEADING = re.compile(r"^H([1-6]?)$")
 # The dot leaders and page number ending a contents entry ("Leave ........ 3").
 _CONTENTS_TAIL = re.compile(r"\s*(?:\.\s?){2,}\s*\S*$|\s+\d+$")
+# Contents entries indented within this many points of each other are at the same level.
+_INDENT_STEP = 4
+# A block can claim the contents list's next unclaimed title or the one after it, so one
+# entry whose title never appears in the text doesn't stop the rest being matched.
+_TITLE_LOOKAHEAD = 2
 # Elements that hold blocks of their own; anything else is read as one paragraph.
 _BLOCK_TYPES = {"P", "L", "Table", "TOC", "Figure", "Formula", "BlockQuote", "Caption", "Note", "Code",
                 "Document", "Part", "Art", "Sect", "Div", "NonStruct", "Private", "Index", "TOCI", "Form"}
@@ -217,6 +222,8 @@ class _Renderer:
         self.objects = objects
         self.assets = assets
         self.blocks: list[Block] = []
+        self.contents_titles: list[tuple[str, int]] = []  # see find_contents_titles
+        self.next_title = 0  # the first contents title not yet claimed
 
     def add(self, element: Element, markdown: str) -> None:
         if markdown.strip():
@@ -244,11 +251,24 @@ class _Renderer:
         if heading:
             text = self.linked_text(element)
             if text:
+                self.claim_contents_title(self.text(element))
                 self.add(element, "#" * int(heading.group(1) or 1) + " " + text)
         elif element.type == "L":
             self.add(element, _join_list(self.list_items(element, 0)))
         elif element.type == "Table":
-            self.add(element, self.table(element))
+            # A full-width row opening with the contents list's next title splits the table there.
+            segment: list[Element] = []
+            for row in _descendants(element, "TR"):
+                title, rest = self.row_title(row)
+                if title:
+                    if segment:
+                        self.add(segment[0], self.table(segment))
+                    self.add(row, title)
+                    segment = [rest] if rest else []
+                else:
+                    segment.append(row)
+            if segment:
+                self.add(segment[0], self.table(segment))
         elif element.type == "TOC":
             self.add(element, "\n".join(self.contents_entries(element, 0)))
         elif element.type == "Figure" and not _holds_blocks(element):
@@ -258,7 +278,87 @@ class _Renderer:
                 if isinstance(kid, Element):
                     self.render(kid)
         else:
-            self.add(element, escape(self.linked_text(element)))
+            self.add(element, self.contents_heading(self.text(element)) or escape(self.linked_text(element)))
+
+    def contents_heading(self, text: str) -> str | None:
+        """A heading for `text` if it is the contents list's next title, though not tagged as a heading (StR-017).
+
+        Authors don't always give a section title a heading style; the contents
+        list still names it.
+        """
+        level = self.claim_contents_title(text)
+        return "#" * level + " " + text if level else None
+
+    def claim_contents_title(self, text: str) -> int | None:
+        """Match `text` to the contents list's next unclaimed title, or the one after; return its level.
+
+        Titles are claimed in the contents list's order, by tagged headings and
+        promoted blocks alike, so the same words earlier or later in the document
+        don't take an entry that belongs elsewhere.
+        """
+        key = text.casefold()
+        ahead = self.contents_titles[self.next_title:self.next_title + _TITLE_LOOKAHEAD]
+        for offset, (title, level) in enumerate(ahead):
+            if title == key:
+                self.next_title += offset + 1
+                return level
+        return None
+
+    def row_title(self, row: Element) -> tuple[str | None, Element | None]:
+        """A heading for a table row with one filled cell whose first paragraph (or whole text) is a contents title.
+
+        Returns the heading and the row with that paragraph taken out (None if
+        nothing is left), or (None, None) when the row holds no title.
+        """
+        cells = [cell for cell in row.kids if isinstance(cell, Element) and self.text(cell)]
+        if len(cells) != 1:
+            return None, None
+        cell = cells[0]
+        first = next((kid for kid in cell.kids if isinstance(kid, Element) and kid.type == "P"), None)
+        heading = self.contents_heading(self.text(first if first is not None else cell))
+        if not heading:
+            return None, None
+        if first is None:
+            return heading, None
+        rest = Element(cell.type, [kid for kid in cell.kids if kid is not first], page=cell.page,
+                       column_span=cell.column_span, row_span=cell.row_span)
+        if not self.text(rest):
+            return heading, None
+        return heading, Element(row.type, [rest if kid is cell else kid for kid in row.kids], page=row.page)
+
+    def find_contents_titles(self, root: Element) -> None:
+        """The contents list's titles in order, each with the heading level it stands for.
+
+        Levels come from the contents list's indentation: entries indented like
+        a tagged heading's entry take that heading's level, and each step further
+        in is one level deeper.
+        """
+        entries = []  # (title, indent)
+        for entry in _all(root, "TOCI"):
+            title = _CONTENTS_TAIL.sub("", self.text(entry, skip={"TOC"})).casefold()
+            chars = [o for c in contents(entry, {"TOC"}) for o in self.objects.get((c.page, c.mcid), [])
+                     if o["object_type"] == "char" and o["text"].strip()]
+            if title and chars:
+                entries.append((title, min(c["x0"] for c in chars)))
+        tagged: dict[str, list[int]] = {}
+        for heading in _all(root, "H", "H1", "H2", "H3", "H4", "H5", "H6"):
+            tagged.setdefault(self.text(heading).casefold(), []).append(int(heading.type[1:] or 1))
+        ranks: dict[float, int] = {}  # indent -> rank, counting indents within _INDENT_STEP as one
+        previous = None
+        for indent in sorted({indent for _, indent in entries}):
+            rank = (ranks[previous] + (indent - previous > _INDENT_STEP)) if previous is not None else 0
+            ranks[indent] = rank
+            previous = indent
+        known: dict[int, int] = {}  # indent rank -> heading level
+        for title, indent in entries:
+            if tagged.get(title):
+                known.setdefault(ranks[indent], tagged[title][0])
+        self.contents_titles = []
+        for title, indent in entries:
+            rank = ranks[indent]
+            nearest = min(known, key=lambda r: abs(r - rank), default=None)
+            level = known[nearest] + rank - nearest if nearest is not None else rank + 1
+            self.contents_titles.append((title, min(max(level, 1), 6)))
 
     def linked_text(self, element: Element, skip=frozenset()) -> str:
         """The element's text with its web links as Markdown links; links within the PDF stay plain text."""
@@ -318,14 +418,14 @@ class _Renderer:
                 entries += self.contents_entries(nested, depth + 1)
         return entries
 
-    def table(self, element: Element) -> str:
-        """One Markdown table, however many pages it runs over; the first row is the header row.
+    def table(self, table_rows: list[Element]) -> str:
+        """One Markdown table of `table_rows`, however many pages it runs over; the first row is the header row.
 
         A merged cell leaves the cells it covers blank, across columns and down rows.
         """
         rows = []
         covered: dict[int, int] = {}  # column -> how many more rows a cell above still covers
-        for row in _descendants(element, "TR"):
+        for row in table_rows:
             cells: list[str] = []
             for cell in (kid for kid in row.kids if isinstance(kid, Element)):
                 while covered.get(len(cells)):
@@ -384,8 +484,18 @@ def blocks(root: Element, objects: dict, assets) -> list[Block]:
     saving method returns the Asset's link, or None if it was dropped.
     """
     renderer = _Renderer(objects, assets)
+    renderer.find_contents_titles(root)
     renderer.render(root)
     return renderer.blocks
+
+
+def _all(element: Element, *types: str):
+    """Every element of the given types under `element`, nested ones included, in reading order."""
+    for kid in element.kids:
+        if isinstance(kid, Element):
+            if kid.type in types:
+                yield kid
+            yield from _all(kid, *types)
 
 
 def _only_a_frame(images: list, drawn: list) -> bool:

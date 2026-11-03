@@ -11,6 +11,7 @@ A PDF's Converted Document used to be one `## Page N` section per page, with the
 
 ## Consequences
 
+- Section titles the author left untagged are recovered only from the document's own contents list, matched in its order: a paragraph, or the first paragraph of a full-width table row, that is the list's next title becomes a heading at the level the list's indentation gives. Other bold lines are not promoted; tools that promote every short bold line (Word's PDF import, PyMuPDF4LLM) produce many false headings.
 - Heading levels are the author's, as tagged, even when inconsistent (a lettered sub-section tagged at the same level as its numbered section). Correcting them from numbering would be guesswork of its own.
 - The tags' reading order is followed, including where it differs from the page (a text box anchored elsewhere appears where its tag sits).
 - A document uses the tag path only when its tags reach at least 80% of its non-furniture text; partly tagged PDFs use the layout rules. The log records which path each PDF took.

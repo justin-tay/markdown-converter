@@ -54,6 +54,18 @@ def test_contents_list_keeps_titles_without_leaders_or_page_numbers(run, tmp_pat
     assert "- Joining\n- Facilities" in text
 
 
+def test_titles_listed_in_the_contents_become_headings_even_where_the_tags_say_otherwise(run, tmp_path):
+    text = _convert_tagged(run, tmp_path)
+
+    # Level from the contents list's indentation: "Questions" sits with the tagged level-2 sections,
+    # "Room bookings" one step in. The one-cell header row becomes a heading above its table.
+    assert ("## Questions\n\nTip\n\n### Room bookings\n\n"
+            "| Day | Slots |\n|---|---|\n| Monday | 4 |\n\n"
+            "### Cancellations\n\n| Cancel a day ahead. |\n|---|") in text
+    # Titles are matched in the contents list's order, so an early label with the same words stays a paragraph.
+    assert "on page 2.\n\nRoom bookings\n\n" in text
+
+
 def test_page_furniture_is_left_out_and_each_page_gets_a_marker_before_its_first_block(run, tmp_path):
     text = _convert_tagged(run, tmp_path)
 
