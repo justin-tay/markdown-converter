@@ -6,10 +6,11 @@
 
 **Status:** ready-for-agent
 
-- [x] Drawn shapes (rectangles, lines, curves) outside every bordered table, and smaller than half the page, are grouped: shapes within 12 pt of each other belong to one group
+- [x] Drawn shapes (rectangles, lines, curves) outside every bordered table, and smaller than half the page, are grouped: shapes within 24 pt of each other belong to one group (12 pt split a diagram from its own side arrow)
+- [x] The area takes in labels that stick out past the shapes (any line of text overlapping them) and the rest of a caption (lines within the area's width, less than a paragraph gap from a line already taken), plus a small margin so strokes and tall letters aren't clipped; text merely inside the widened area, such as a section title beside a caption, stays in the text
 - [x] A group is a diagram when it has at least 10 shapes, includes a curve or a filled shape, has no more than two words of text inside it per shape, and is at least 1 inch wide and half an inch tall; a lone rule, an underline, a box around a few words or a table told apart by shaded rows is not
 - [x] Each diagram becomes one 150 DPI Figure Snapshot of its area (`pNNN-figNN.png`), placed where its top sits among the page's blocks (StR-046, StR-022)
-- [x] Text inside a diagram's area is left out of the text, since the picture shows it; Embedded Images inside it are not linked separately
+- [x] A diagram's labels and caption are left out of the text, since the picture shows them; Embedded Images inside it are not linked separately
 - [x] Figures smaller than `--min-image-size` are skipped (StR-024)
 - [x] S-18 gains a diagram (filled boxes joined by a curved arrow, with labels), a borderless table with shaded rows and an underline; only the diagram becomes a picture, and its bordered tables stay Markdown tables
 

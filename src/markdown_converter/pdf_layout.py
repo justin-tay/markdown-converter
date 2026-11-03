@@ -31,7 +31,7 @@ _LARGER = 0.5
 # Diagrams: drawn shapes outside bordered tables, and smaller than this share of the page, are
 # grouped when within this many points of each other...
 _MAX_SHAPE_SHARE = 0.5
-_SHAPE_GAP = 12
+_SHAPE_GAP = 24
 # ...and a group is a diagram with at least this many shapes, a curve or a filled shape,
 # at least one shape for every this many words of text inside it (shaded table rows and
 # coloured text boxes are mostly text), and at least this size in points (curves are
@@ -39,8 +39,11 @@ _SHAPE_GAP = 12
 _DIAGRAM_MIN_SHAPES = 10
 _DIAGRAM_MAX_WORDS_PER_SHAPE = 2
 _DIAGRAM_MIN_WIDTH, _DIAGRAM_MIN_HEIGHT = 72, 36
-# A Figure Snapshot of a diagram takes in this many points around its shapes, for labels at its edges.
-_DIAGRAM_MARGIN = 4
+# A Figure Snapshot of a diagram takes in this many points around its shapes, so thick
+# strokes at its edges aren't clipped; lines of text within it are the diagram's labels.
+_DIAGRAM_MARGIN = 6
+# ...and this many more around its labels and caption.
+_TEXT_MARGIN = 3
 
 
 def blocks(document, figures) -> list[Block]:
@@ -57,7 +60,9 @@ def blocks(document, figures) -> list[Block]:
                  if line["text"]]
         tables = [table for table in page.find_tables() if _table_rows(table)]
         diagrams = _diagrams(page, tables, lines)
-        lines = [line for line in lines if not any(_middle_inside(line, area) for area in diagrams)]
+        labels = {id(line) for _, taken in diagrams for line in taken}  # shown in the pictures instead
+        lines = [line for line in lines if id(line) not in labels]
+        diagrams = [area for area, _ in diagrams]
         pages.append((page, lines, tables, diagrams))
     furniture = _furniture(pages)
     body_size, margin = _body_style(pages)
@@ -156,8 +161,9 @@ def _gap(previous: dict, line: dict) -> float:
     return (line["top"] - previous["bottom"]) / max(previous["bottom"] - previous["top"], 1)
 
 
-def _diagrams(page, tables, lines: list[dict]) -> list[tuple[float, float, float, float]]:
-    """The areas (x0, top, x1, bottom) of the page's diagrams: dense groups of drawn shapes outside its tables."""
+def _diagrams(page, tables, lines: list[dict]) -> list[tuple[tuple[float, float, float, float], list[dict]]]:
+    """The page's diagrams, dense groups of drawn shapes outside its tables: each one's area
+    (x0, top, x1, bottom) and the lines of text that are its labels and caption."""
     page_area = page.width * page.height
     shapes = [shape for kind in ("rect", "line", "curve") for shape in page.objects.get(kind, [])
               if (shape["x1"] - shape["x0"]) * (shape["bottom"] - shape["top"]) < page_area * _MAX_SHAPE_SHARE
@@ -166,13 +172,56 @@ def _diagrams(page, tables, lines: list[dict]) -> list[tuple[float, float, float
     for group in _groups(shapes):
         x0, top, x1, bottom = (min(s["x0"] for s in group), min(s["top"] for s in group),
                                max(s["x1"] for s in group), max(s["bottom"] for s in group))
-        words = sum(len(line["text"].split()) for line in lines if _middle_inside(line, (x0, top, x1, bottom)))
+        (x0, top, x1, bottom), labels = _with_labels((x0 - _DIAGRAM_MARGIN, top - _DIAGRAM_MARGIN,
+                                                      x1 + _DIAGRAM_MARGIN, bottom + _DIAGRAM_MARGIN), lines)
+        words = sum(len(line["text"].split()) for line in labels)
         if (len(group) >= _DIAGRAM_MIN_SHAPES and x1 - x0 >= _DIAGRAM_MIN_WIDTH
                 and bottom - top >= _DIAGRAM_MIN_HEIGHT
                 and words <= len(group) * _DIAGRAM_MAX_WORDS_PER_SHAPE
                 and any(s["object_type"] == "curve" or s.get("fill") for s in group)):
-            areas.append((x0 - _DIAGRAM_MARGIN, top - _DIAGRAM_MARGIN, x1 + _DIAGRAM_MARGIN, bottom + _DIAGRAM_MARGIN))
+            # Lines of text are measured to their letters' usual height; tall and italic letters reach past it.
+            area = (x0 - _TEXT_MARGIN, top - _TEXT_MARGIN, x1 + _TEXT_MARGIN, bottom + _TEXT_MARGIN)
+            areas.append((area, labels))
     return areas
+
+
+def _with_labels(box: tuple[float, float, float, float], lines: list[dict]):
+    """A diagram's area widened to take in its labels and captions, and those lines.
+
+    Lines overlapping the area are labels, often sticking out past the shapes they
+    name. A line within the area's width less than a paragraph gap above or below
+    a line already taken in continues it, as a caption's lines do. Nothing else is
+    taken in, so the area can't spread into the paragraphs around it.
+    """
+    taken = [line for line in lines if _overlaps(line, box)]
+    box = _around(box, taken)
+    grew = True
+    while grew:
+        grew = False
+        for line in lines:
+            if (not any(line is other for other in taken) and box[0] - 2 <= line["x0"] and line["x1"] <= box[2] + 2
+                    and any(_continues(line, other) for other in taken)):
+                taken.append(line)
+                box = _around(box, [line])
+                grew = True
+    return box, taken
+
+
+def _continues(line: dict, other: dict) -> bool:
+    """Whether two lines sit one under the other, less than a paragraph gap apart."""
+    upper, lower = (line, other) if line["top"] < other["top"] else (other, line)
+    side_by_side = line["x0"] < other["x1"] and other["x0"] < line["x1"]
+    return side_by_side and 0 <= lower["top"] - upper["bottom"] <= _gap_limit(upper)
+
+
+def _gap_limit(line: dict) -> float:
+    return (line["bottom"] - line["top"]) * _PARAGRAPH_GAP
+
+
+def _around(box: tuple[float, float, float, float], lines: list[dict]) -> tuple[float, float, float, float]:
+    x0, top, x1, bottom = box
+    return (min([x0, *(line["x0"] for line in lines)]), min([top, *(line["top"] for line in lines)]),
+            max([x1, *(line["x1"] for line in lines)]), max([bottom, *(line["bottom"] for line in lines)]))
 
 
 def _groups(shapes: list[dict]) -> list[list[dict]]:
@@ -213,9 +262,10 @@ def _box_inside(item: dict, box: tuple[float, float, float, float]) -> bool:
     return x0 - 2 <= item["x0"] and item["x1"] <= x1 + 2 and top - 2 <= item["top"] and item["bottom"] <= bottom + 2
 
 
-def _middle_inside(line: dict, box: tuple[float, float, float, float]) -> bool:
+def _overlaps(item: dict, box: tuple[float, float, float, float]) -> bool:
     x0, top, x1, bottom = box
-    return x0 <= (line["x0"] + line["x1"]) / 2 <= x1 and top <= (line["top"] + line["bottom"]) / 2 <= bottom
+    return item["x0"] < x1 and item["x1"] > x0 and item["top"] < bottom and item["bottom"] > top
+
 
 
 def _in_table(line: dict, tables) -> bool:

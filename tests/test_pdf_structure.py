@@ -153,13 +153,17 @@ def test_untagged_diagram_becomes_one_figure_snapshot_in_place_of_its_labels(run
 
     assert ("| Laptop | 900 |\n\n![](project-plan_assets/p001-fig01.png)\n\n"
             "The release process is shown above.") in text
-    assert "Draft site" not in text and "Live site" not in text
+    for label in ("Draft site", "Live site", "Owner", "Each release passes review", "before it goes live"):
+        assert label not in text
     from PIL import Image
 
     with Image.open(tmp_path / "project-plan_assets" / "p001-fig01.png") as image:
         width, height = image.size
-    # The diagram spans about 328 x 62 pt; at 150 DPI that is roughly 683 x 129 px, plus a little margin.
-    assert 660 <= width <= 720 and 120 <= height <= 170
+    # Across: from the label sticking out on the left (30 pt) to the shape 18 pt beyond the
+    # right-hand box (438 pt), about 408 pt or 850 px at 150 DPI, plus margins. Down: the
+    # caption's top line (about 406 pt from the page bottom) to the boxes' foot (330 pt),
+    # about 76 pt or 158 px, plus margins. Without the caption it would be under 140 px.
+    assert 850 <= width <= 900 and 160 <= height <= 185
 
 
 def test_untagged_shaded_rows_and_underlines_are_not_mistaken_for_diagrams(run, tmp_path):

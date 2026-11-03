@@ -1229,6 +1229,13 @@ def build_untagged_pdf(folder: Path) -> Path:
     line(90, 350, "Draft site")
     line(320, 350, "Live site")
     pdf.setFillColorRGB(0, 0, 0)
+    line(30, 365, "Owner: web team")  # a label that ends on a box and sticks out past the shapes
+    # A shape a little further off than the others, and a two-line caption directly above.
+    pdf.setFillColorRGB(0.2, 0.4, 0.8)
+    pdf.rect(418, 330, 20, 50, fill=1, stroke=0)
+    pdf.setFillColorRGB(0, 0, 0)
+    line(150, 397, "Each release passes review")
+    line(150, 386, "before it goes live.")
     line(72, 300, "The release process is shown above.")
     # Not a diagram: a borderless table whose rows are told apart by shaded bands, and an underline.
     for row in range(12):
