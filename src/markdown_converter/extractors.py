@@ -2,7 +2,8 @@
 
 Each extractor takes the Markdown markitdown produced and returns it with Asset
 links in place. Formats without an extractor keep markitdown's output as is.
-Extractors report anything the user should know through `store.warnings`.
+Extractors report anything the user should know through `store.warnings`, and
+anything only worth a line in the log through `store.notes`.
 """
 
 from __future__ import annotations

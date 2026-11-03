@@ -34,3 +34,16 @@ python tests/sample_set.py samples
 |---|---|---|---|---|
 | B1 | On an internet-connected machine, build the bundle for the target platform (see README). Copy the repository and bundle to the target machine, disable networking, delete `.venv`, run the launcher with `samples/sales.csv`. | Setup installs from the bundle and conversion succeeds with networking disabled. | StR-062 | |
 | B2 | With networking enabled, run `--selftest-offline`. | `PASS: network access is blocked during conversion`. | StR-043 | |
+
+## PDF structure on confidential samples (any platform)
+
+These use three confidential sample PDFs that can't be committed: two tagged PDFs exported from Word and one untagged PDF, kept outside the repository. Convert their folder with `--output` to a scratch folder and inspect the three Converted Documents (ticket 20).
+
+| # | Steps | Expected result | Requirement | Result |
+|---|---|---|---|---|
+| P1 | Search all three Converted Documents for each sample's running header and footer text, classification line and bare page numbers. | None appear as text. | StR-018 | |
+| P2 | Compare each tagged sample's headings with its contents page. | The contents entries are headings, at the levels the contents page shows. | StR-017 | |
+| P3 | In the untagged sample, check the bold section titles and the bordered tables. | Every bold section title is a heading; bordered tables are Markdown tables. | StR-017 | |
+| P4 | In the tagged samples, check the drawn figures and any map with a legend. | Drawn pictures appear as Figure Snapshots, and boxes that only frame text appear as their text with no picture; a map and its legend are one picture. | StR-046 | |
+| P5 | Check the Page Markers in each Converted Document. | `<!-- page N -->` appears for every page, before the first block that starts on it. | StR-019 | |
+| P6 | Check the log. | It says whether each PDF's structure was read from its tags or its layout. | StR-017 | |

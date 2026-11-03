@@ -27,8 +27,8 @@ class SkippedError(Exception):
     """The Source File can't be converted as it stands (e.g. it is encrypted)."""
 
 
-def convert_document(source: Path, converted: Path, options: ConversionOptions) -> list[str]:
-    """Write the Converted Document and Assets Folder for `source`; return warnings.
+def convert_document(source: Path, converted: Path, options: ConversionOptions) -> tuple[list[str], list[str]]:
+    """Write the Converted Document and Assets Folder for `source`; return its warnings and log notes.
 
     Raises SkippedError for encrypted files, ConnectionError when the Offline
     Guard blocked a network attempt (even one the library swallowed), and any
@@ -51,7 +51,7 @@ def convert_document(source: Path, converted: Path, options: ConversionOptions) 
         text = _front_matter(source) + text
     store.commit()
     converted.write_text(text, encoding="utf-8")
-    return store.warnings
+    return store.warnings, store.notes
 
 
 def _is_encrypted(source: Path) -> bool:

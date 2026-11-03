@@ -6,10 +6,11 @@ import sample_set
 
 
 def _page(text, number):
-    return text.split(f"## Page {number}\n", 1)[1].split("## Page ", 1)[0]
+    """What follows a page's Page Marker, up to the next one."""
+    return text.split(f"<!-- page {number} -->\n", 1)[1].split("<!-- page ", 1)[0]
 
 
-def test_each_pdf_page_gets_its_own_section(run, tmp_path):
+def test_each_pdf_page_starts_at_its_page_marker(run, tmp_path):
     source = sample_set.build_text_pdf(tmp_path)
 
     run(source)

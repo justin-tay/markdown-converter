@@ -895,11 +895,323 @@ def build_folder_tree(folder: Path) -> Path:
     return root
 
 
+class _TaggedPdf:
+    """Writes a Tagged PDF from raw PDF objects, since reportlab can't write tags.
+
+    Content is drawn as marked-content runs; `element` builds the structure tree
+    from those runs, other elements and link annotations.
+    """
+
+    WIDTH, HEIGHT = 595, 842
+
+    def __init__(self, pages: int):
+        from pypdf import PdfWriter
+
+        self.writer = PdfWriter()
+        self.pages = [self.writer.add_blank_page(self.WIDTH, self.HEIGHT) for _ in range(pages)]
+        self.operators: list[list[str]] = [[] for _ in range(pages)]
+        self.images: list[dict] = [{} for _ in range(pages)]
+        self.annotations: list[list] = [[] for _ in range(pages)]
+        self.marked: list[list] = [[] for _ in range(pages)]  # element owning each MCID, per page
+        self._pending: list[tuple] = []  # (element, kid) pairs resolved on save
+        self.parent_tree: list = []
+
+    def _run(self, page: int, tag: str, operators: list[str]):
+        mcid = len(self.marked[page - 1])
+        self.marked[page - 1].append(None)
+        self.operators[page - 1] += [f"/{tag} <</MCID {mcid}>> BDC", *operators, "EMC"]
+        return ("mcr", page, mcid)
+
+    @staticmethod
+    def _text_operators(x: float, y: float, text: str, size: float, bold: bool) -> list[str]:
+        escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        return ["BT", f"/{'F2' if bold else 'F1'} {size} Tf", f"{x} {y} Td", f"({escaped}) Tj", "ET"]
+
+    def text(self, page: int, x: float, y: float, text: str, size: float = 11, bold: bool = False, tag: str = "P"):
+        return self._run(page, tag, self._text_operators(x, y, text, size, bold))
+
+    def artifact(self, page: int, x: float, y: float, text: str, size: float = 9):
+        self.operators[page - 1] += ["/Artifact BMC", *self._text_operators(x, y, text, size, False), "EMC"]
+
+    def drawing(self, page: int, operators: list[str]):
+        return self._run(page, "Figure", ["q", *operators, "Q"])
+
+    def image(self, page: int, x: float, y: float, width: float, height: float, png: bytes, artifact: bool = False):
+        """Draw an image: as tagged content, or as Page Furniture outside the tags when `artifact`."""
+        import zlib
+
+        from PIL import Image
+        from pypdf.generic import NameObject, NumberObject, StreamObject
+
+        with Image.open(io.BytesIO(png)) as picture:
+            rgb = picture.convert("RGB")
+        stream = StreamObject()
+        stream._data = zlib.compress(rgb.tobytes())
+        stream.update({
+            NameObject("/Type"): NameObject("/XObject"), NameObject("/Subtype"): NameObject("/Image"),
+            NameObject("/Width"): NumberObject(rgb.width), NameObject("/Height"): NumberObject(rgb.height),
+            NameObject("/ColorSpace"): NameObject("/DeviceRGB"),
+            NameObject("/BitsPerComponent"): NumberObject(8), NameObject("/Filter"): NameObject("/FlateDecode"),
+        })
+        name = f"Im{len(self.images[page - 1]) + 1}"
+        self.images[page - 1][name] = self.writer._add_object(stream)
+        operators = ["q", f"{width} 0 0 {height} {x} {y} cm", f"/{name} Do", "Q"]
+        if artifact:
+            self.operators[page - 1] += ["/Artifact BMC", *operators, "EMC"]
+            return None
+        return self._run(page, "Figure", operators)
+
+    def link(self, page: int, rect: tuple, uri: str | None = None, to_page: int | None = None):
+        from pypdf.generic import (ArrayObject, DictionaryObject, FloatObject, NameObject, NullObject,
+                                   TextStringObject)
+
+        annotation = DictionaryObject({
+            NameObject("/Type"): NameObject("/Annot"), NameObject("/Subtype"): NameObject("/Link"),
+            NameObject("/Rect"): ArrayObject(FloatObject(v) for v in rect),
+            NameObject("/Border"): ArrayObject([FloatObject(0)] * 3),
+        })
+        if uri:
+            annotation[NameObject("/A")] = DictionaryObject({
+                NameObject("/S"): NameObject("/URI"), NameObject("/URI"): TextStringObject(uri)})
+        else:
+            annotation[NameObject("/Dest")] = ArrayObject([
+                self.pages[to_page - 1].indirect_reference, NameObject("/XYZ"), NullObject(), NullObject(),
+                NullObject()])
+        reference = self.writer._add_object(annotation)
+        self.annotations[page - 1].append(reference)
+        return ("objr", page, reference)
+
+    def element(self, tag: str, *kids, alt: str | None = None, bbox: tuple | None = None,
+                rows: int | None = None, columns: int | None = None):
+        """A structure element; `rows` and `columns` are a table cell's RowSpan and ColSpan."""
+        from pypdf.generic import (ArrayObject, DictionaryObject, FloatObject, NameObject, NumberObject,
+                                   TextStringObject)
+
+        element = DictionaryObject({NameObject("/Type"): NameObject("/StructElem"), NameObject("/S"): NameObject(f"/{tag}")})
+        if alt is not None:
+            element[NameObject("/Alt")] = TextStringObject(alt)
+        if bbox is not None:
+            element[NameObject("/A")] = DictionaryObject({
+                NameObject("/O"): NameObject("/Layout"), NameObject("/BBox"): ArrayObject(FloatObject(v) for v in bbox)})
+        if rows or columns:
+            element[NameObject("/A")] = DictionaryObject({
+                NameObject("/O"): NameObject("/Table"),
+                **({NameObject("/RowSpan"): NumberObject(rows)} if rows else {}),
+                **({NameObject("/ColSpan"): NumberObject(columns)} if columns else {})})
+        reference = self.writer._add_object(element)
+        for kid in kids:
+            self._pending.append((reference, kid))
+        return ("elem", reference)
+
+    def save(self, path: Path, *top) -> Path:
+        from pypdf.generic import (ArrayObject, BooleanObject, DictionaryObject, NameObject, NumberObject,
+                                   StreamObject)
+
+        document = self.element("Document", *top)
+        kids_of: dict[int, list] = {}
+        for parent, kid in self._pending:
+            parent_object = parent.get_object()
+            if kid[0] == "elem":
+                kid[1].get_object()[NameObject("/P")] = parent
+                kids_of.setdefault(id(parent_object), []).append(kid[1])
+            elif kid[0] == "mcr":
+                _, page, mcid = kid
+                self.marked[page - 1][mcid] = parent
+                kids_of.setdefault(id(parent_object), []).append(DictionaryObject({
+                    NameObject("/Type"): NameObject("/MCR"), NameObject("/MCID"): NumberObject(mcid),
+                    NameObject("/Pg"): self.pages[page - 1].indirect_reference}))
+            else:
+                _, page, annotation = kid
+                key = len(self.pages) + len(self.parent_tree)
+                annotation.get_object()[NameObject("/StructParent")] = NumberObject(key)
+                self.parent_tree.append((key, parent))
+                kids_of.setdefault(id(parent_object), []).append(DictionaryObject({
+                    NameObject("/Type"): NameObject("/OBJR"), NameObject("/Obj"): annotation,
+                    NameObject("/Pg"): self.pages[page - 1].indirect_reference}))
+            parent_object[NameObject("/K")] = ArrayObject(kids_of[id(parent_object)])
+        root = DictionaryObject({NameObject("/Type"): NameObject("/StructTreeRoot")})
+        root_reference = self.writer._add_object(root)
+        document[1].get_object()[NameObject("/P")] = root_reference
+        root[NameObject("/K")] = ArrayObject([document[1]])
+        numbers = ArrayObject()
+        fonts = DictionaryObject({
+            NameObject(f"/{name}"): DictionaryObject({
+                NameObject("/Type"): NameObject("/Font"), NameObject("/Subtype"): NameObject("/Type1"),
+                NameObject("/BaseFont"): NameObject(f"/{font}"), NameObject("/Encoding"): NameObject("/WinAnsiEncoding")})
+            for name, font in (("F1", "Helvetica"), ("F2", "Helvetica-Bold"))})
+        for index, page in enumerate(self.pages):
+            content = StreamObject()
+            content._data = "\n".join(self.operators[index]).encode("latin-1")
+            page[NameObject("/Contents")] = self.writer._add_object(content)
+            page[NameObject("/Resources")] = DictionaryObject({
+                NameObject("/Font"): fonts,
+                NameObject("/XObject"): DictionaryObject(
+                    {NameObject(f"/{name}"): ref for name, ref in self.images[index].items()})})
+            page[NameObject("/StructParents")] = NumberObject(index)
+            if self.annotations[index]:
+                page[NameObject("/Annots")] = ArrayObject(self.annotations[index])
+            numbers += [NumberObject(index), ArrayObject(self.marked[index])]
+        for key, parent in self.parent_tree:
+            numbers += [NumberObject(key), parent]
+        root[NameObject("/ParentTree")] = DictionaryObject({NameObject("/Nums"): numbers})
+        root[NameObject("/ParentTreeNextKey")] = NumberObject(len(self.pages) + len(self.parent_tree))
+        catalog = self.writer._root_object
+        catalog[NameObject("/StructTreeRoot")] = root_reference
+        catalog[NameObject("/MarkInfo")] = DictionaryObject({NameObject("/Marked"): BooleanObject(True)})
+        with path.open("wb") as stream:
+            self.writer.write(stream)
+        return path
+
+
+TAGGED_LOGO_PNG = png_bytes(48, 24, (160, 40, 40))
+
+
+def build_tagged_pdf(folder: Path) -> Path:
+    """S-17: a three-page Tagged PDF with Page Furniture, headings, lists, a table and figures."""
+    pdf = _TaggedPdf(3)
+    e, t = pdf.element, pdf.text
+    for page in (1, 2, 3):
+        pdf.artifact(page, 72, 815, "Example Club - Members only")
+        pdf.artifact(page, 280, 30, f"Page {page} of 3")
+        pdf.image(page, 480, 805, 48, 24, LOGO_PNG, artifact=True)
+
+    # Page 1: title, contents, a numbered list and a paragraph with links.
+    title = e("H1", t(1, 72, 760, "Club handbook", 20, True))
+    contents = e("TOC",
+                 e("TOCI", t(1, 72, 720, "Joining .................................. 1")),
+                 e("TOCI", t(1, 72, 704, "Facilities .............................. 2")))
+    leave = e("H2", t(1, 72, 670, "Joining", 14, True))
+    steps = e("L",
+              e("LI", e("Lbl", t(1, 72, 645, "1.")), e("LBody", t(1, 90, 645, "Fill in the form at the desk."))),
+              e("LI", e("Lbl", t(1, 72, 630, "2.")), e("LBody", t(1, 90, 630, "A volunteer checks it."))))
+    from reportlab.pdfbase.pdfmetrics import stringWidth
+
+    runs = ["Forms are on the ", "website", ", and facilities are covered on ", "page 2", "."]
+    x = [72.0]
+    for run in runs:
+        x.append(x[-1] + stringWidth(run, "Helvetica", 11))
+    forms = e("P", t(1, x[0], 600, runs[0]),
+              e("Link", t(1, x[1], 600, runs[1]), pdf.link(1, (x[1], 597, x[2], 611), uri="https://example.com/forms")),
+              t(1, x[2], 600, runs[2]),
+              e("Link", t(1, x[3], 600, runs[3]), pdf.link(1, (x[3], 597, x[4], 611), to_page=2)),
+              t(1, x[4], 600, runs[4]))
+    empty_heading = e("H2", t(1, 72, 580, " "))
+
+    # Page 2: benefits list, a vector chart, and a table that runs onto page 3.
+    benefits = e("H2", t(2, 72, 760, "Facilities", 14, True))
+    cover = e("L",
+              e("LI", e("Lbl", t(2, 72, 735, "\x95")), e("LBody", t(2, 90, 735, "Library"))),
+              e("LI", e("Lbl", t(2, 72, 720, "\x95")), e("LBody", t(2, 90, 720, "Workshop"),
+                e("L", e("LI", e("Lbl", t(2, 100, 705, "\x95")), e("LBody", t(2, 116, 705, "Open on Saturdays")))))),
+              e("LI", e("Lbl", t(2, 72, 690, "\x95")),
+                e("LBody", e("Link", t(2, 90, 690, "Booking page"),
+                             pdf.link(2, (90, 687, 160, 701), uri="https://example.com/booking")))))
+    bars = [f"0.1 0.4 0.7 rg {120 + i * 50} 520 30 {h} re f" for i, h in enumerate((60, 110, 80, 140))]
+    chart = e("Figure", pdf.drawing(2, ["0 0 0 RG 110 515 m 330 515 l S", *bars]), alt="Visits by quarter",
+              bbox=(100, 505, 340, 670))
+    header = e("TR", e("TH", t(2, 72, 470, "Room", bold=True)), e("TH", t(2, 250, 470, "Seats", bold=True)))
+    basic = e("TR", e("TD", t(2, 72, 450, "Hall")), e("TD", t(2, 250, 450, "80")))
+    premium = e("TR", e("TD", t(3, 72, 760, "Studio")), e("TD", t(3, 250, 760, "12")))
+    table = e("Table", e("THead", header), e("TBody", basic, premium))
+
+    # Page 3: a closing paragraph, a single-image figure and a text box.
+    deadline = e("P", t(3, 72, 720, "Book rooms a week ahead."))
+    logo = e("Figure", pdf.image(3, 72, 640, 96, 48, TAGGED_LOGO_PNG), alt="Club logo")
+    box = e("Figure", pdf.drawing(3, ["0 0 0 RG 70 560 300 40 re S"]),
+            e("P", t(3, 80, 575, "Remember to sign the visitor book.")))
+    annotated = e("Figure", pdf.image(3, 72, 400, 120, 90, png_bytes(40, 30, (230, 230, 230))),
+                  pdf.drawing(3, ["1 0 0 RG 2 w 80 410 m 180 480 l S"]), alt="Annotated sign-up form")
+    tick = e("Figure", pdf.drawing(3, ["0 0.5 0 rg 72 360 8 8 re f"]), alt="Tick")
+    # A diagram of boxes joined by a curved arrow, with its label tagged as a separate paragraph.
+    diagram = e("Figure", pdf.drawing(3, ["0 0 0 RG 72 200 80 40 re S", "300 200 80 40 re S",
+                                          "152 220 m 200 300 260 300 300 220 c S"]), alt="Booking flow")
+    label = e("P", t(3, 110, 215, "Member sends the booking to the desk"))
+    return pdf.save(folder / "handbook.pdf", title, contents, leave, steps, forms, empty_heading, benefits, cover,
+                    chart, table, deadline, logo, box, annotated, tick, diagram, label)
+
+
+def build_tagged_pdf_out_of_page_order(folder: Path) -> Path:
+    """A Tagged PDF whose reading order jumps ahead and back, as Word's text boxes do.
+
+    Page 2 holds only Page Furniture, so no block starts on it.
+    """
+    pdf = _TaggedPdf(4)
+    e, t = pdf.element, pdf.text
+    for page in (1, 2, 3, 4):
+        pdf.artifact(page, 280, 30, f"Page {page}")
+    return pdf.save(folder / "leaflet.pdf",
+                    e("P", t(1, 72, 760, "Opening paragraph.")),
+                    e("P", t(3, 72, 760, "Callout drawn on page three.")),
+                    e("P", t(1, 72, 700, "Rest of page one.")),
+                    e("P", t(4, 72, 760, "Closing paragraph.")))
+
+
+def build_tagged_pdf_with_merged_cells(folder: Path) -> Path:
+    """A Tagged PDF table with a header cell merged across two columns and a cell merged down two rows."""
+    pdf = _TaggedPdf(1)
+    e, t = pdf.element, pdf.text
+    table = e("Table",
+              e("TR", e("TH", t(1, 72, 760, "Room", bold=True)),
+                e("TH", t(1, 200, 760, "Equipment", bold=True), columns=2)),
+              e("TR", e("TD", t(1, 72, 740, "A"), rows=2), e("TD", t(1, 200, 740, "Projector")),
+                e("TD", t(1, 330, 740, "Yes"))),
+              e("TR", e("TD", t(1, 200, 720, "Screen")), e("TD", t(1, 330, 720, "No"))))
+    return pdf.save(folder / "rooms.pdf", table)
+
+
+def build_untagged_pdf(folder: Path) -> Path:
+    """S-18: an untagged PDF with Page Furniture, bold body-size section titles and a bordered table.
+
+    The table runs over pages 2-4 and repeats its header row at the same height
+    on each, as Page Furniture would.
+    """
+    from reportlab.pdfgen import canvas
+
+    path = folder / "project-plan.pdf"
+    pdf = canvas.Canvas(str(path), invariant=1)
+
+    def furniture(number: int) -> None:
+        pdf.setFont("Helvetica", 11)
+        pdf.drawString(250, 810, "CONFIDENTIAL DRAFT")
+        pdf.drawString(230, 30, f"Part 2 - Appendix A - {number}")
+
+    def line(x: float, y: float, text: str, font: str = "Helvetica", size: float = 11) -> None:
+        pdf.setFont(font, size)
+        pdf.drawString(x, y, text)
+
+    furniture(1)
+    line(72, 740, "PROJECT PLAN", "Helvetica-Bold", 16)
+    line(72, 700, "BACKGROUND", "Helvetica-Bold")
+    line(72, 680, "1. This plan describes the work on the new club")
+    line(72, 666, "website.")
+    line(72, 630, "SCHEDULE", "Helvetica-Bold", 11.4)  # a touch larger, as some exports set it
+    line(72, 610, "2. The team will meet every week.")
+    line(72, 580, "The schedule is in the table that follows.")
+    # A table whose borders split each column in two, putting header and value in different halves.
+    pdf.grid([72, 140, 250, 280, 400], [520, 500, 480])
+    line(146, 506, "Item", "Helvetica-Bold")
+    line(286, 506, "Cost", "Helvetica-Bold")
+    line(78, 486, "Laptop")
+    line(256, 486, "900")
+    pdf.showPage()
+    for number, (serial, activity) in enumerate([("1", "Draft"), ("2", "Review"),
+                                                 ("3", "Publish")], start=2):
+        furniture(number)
+        pdf.grid([72, 140, 400], [780, 760, 740])
+        line(78, 766, "No.", "Helvetica-Bold")
+        line(146, 766, "Task", "Helvetica-Bold")
+        line(78, 746, serial)
+        line(146, 746, activity)
+        pdf.showPage()
+    pdf.save()
+    return path
+
+
 BUILDERS = [
     build_csv, build_json, build_xml, build_text_docx, build_text_pdf, build_encrypted_pdf,
     build_encrypted_docx, build_damaged_docx, build_xls, build_msg, build_zip, build_text_epub,
     build_pdf_with_images, build_pdf_with_vector_chart, build_scanned_pdf,
-    build_pdf_with_undecodable_image, build_word_with_images, build_word_with_charts,
+    build_pdf_with_undecodable_image, build_tagged_pdf, build_untagged_pdf, build_word_with_images, build_word_with_charts,
     build_slides, build_slides_with_chart, build_workbook, build_html_with_images,
     build_epub_with_images,
 ]

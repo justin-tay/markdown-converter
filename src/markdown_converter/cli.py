@@ -98,7 +98,7 @@ def main(argv: Sequence[str], stdin: TextIO, stdout: TextIO) -> int:
             continue
         try:
             plan.converted.parent.mkdir(parents=True, exist_ok=True)
-            file_warnings = convert_document(plan.source, plan.converted, conversion)
+            file_warnings, file_notes = convert_document(plan.source, plan.converted, conversion)
         except SkippedError as skip:
             summary.skipped_file(name, str(skip))
         except Exception as error:  # any library failure fails only this Source File
@@ -107,6 +107,8 @@ def main(argv: Sequence[str], stdin: TextIO, stdout: TextIO) -> int:
             summary.converted_file(name)
             for warning in file_warnings:
                 summary.warn(name, warning)
+            for note in file_notes:
+                summary.note(name, note)
     return EXIT_OK if summary.finish((output or root) / LOG_FILE_NAME) else EXIT_FAILED
 
 

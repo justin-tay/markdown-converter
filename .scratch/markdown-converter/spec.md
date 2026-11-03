@@ -62,7 +62,7 @@ A local converter, built on markitdown, that takes a Target (one file or a folde
 
 33. As a Document User, I want Embedded Images in PDF, DOCX, PPTX and XLSX files saved into the Assets Folder in their original format, so that no visual content is lost or re-encoded.
 34. As a Downstream Consumer, I want Word and PowerPoint image links placed where the image appeared, so that images keep their context in the text.
-35. As a Downstream Consumer, I want PDF image links placed after that page's text within the page's section, so that images stay near the content they illustrate.
+35. As a Downstream Consumer, I want PDF image links placed where their figure is tagged (or after the text of their page in untagged PDFs), so that images stay near the content they illustrate.
 36. As a Downstream Consumer, I want Excel image links placed within the sheet's section, so that I know which sheet an image came from.
 37. As a Document User, I want each Asset's name to say where it came from (`p003-img01.png`, `slide02-img01.png`, `sheet-Sales-chart01.xml`, `img01.png`), so that I can find the source location of any Asset at a glance.
 38. As a Document User, I want an image that repeats with identical content (like a logo on every page) saved once and linked from every place, so that the Assets Folder isn't flooded with copies.
@@ -74,7 +74,7 @@ A local converter, built on markitdown, that takes a Target (one file or a folde
 41. As a Downstream Consumer, I want each Chart in a DOCX, PPTX or XLSX file to appear as a heading with its title and type followed by a Chart Data Table of its values, so that the chart's information is readable as text.
 42. As a Document User, I want each Chart's original XML saved as a Chart Definition and linked, so that the chart can be re-rendered or inspected later.
 43. As a Document User, I want a Chart whose values can't be read to still appear with its heading, a "data not extracted" note and its Chart Definition link, so that I know it existed.
-44. As a Document User, I want `--pdf-page-images` to save a 150 DPI PNG Page Snapshot of every PDF page, linked at the top of each page's section, so that vector charts in PDFs are captured visually.
+44. As a Document User, I want `--pdf-page-images` to save a 150 DPI PNG Page Snapshot of every PDF page, linked straight after each Page Marker, so that vector charts in PDFs are captured visually.
 
 ### HTML, EPUB and other formats
 
@@ -133,7 +133,7 @@ A local converter, built on markitdown, that takes a Target (one file or a folde
 - **Output Planner** — for each Source File decides the Converted Document path and Assets Folder path: beside the source by default or mirrored under `--output`; detects Name Collisions per folder and gives *every* colliding file its extension in the output name (ADR 0005); marks files Up To Date when the Converted Document's modification time is newer than the Source File's, unless `--force`.
 - **Document Converter** — `convert(source, plan, options) -> ConversionResult` (status: converted / failed / skipped-encrypted; reason; warnings; Assets written). Runs markitdown with all online features off (no LLM client, no Azure endpoints, plugins disabled, no URL inputs) and `keep_data_uris` on, then hands the Markdown plus the Source File to a format-specific Asset Extractor. Writes the Converted Document only after extraction succeeds; on `--force` the Assets Folder is removed and rebuilt.
 - **Asset Extractors** (one per format family, same interface):
-  - *PDF* — text is produced per page so each page gets its own section; Embedded Images via pypdf, linked after that page's text; Page Snapshots via pypdfium2 at 150 DPI when `--pdf-page-images`, linked at the top of each page section; "no text layer found" warning when no page has text; encrypted PDFs reported as skipped-encrypted. (ADR 0003)
+  - *PDF* — one continuous document with hidden Page Markers, its structure taken from a Tagged PDF's tags or, failing that, from layout rules, with Page Furniture left out (ADR 0008); Embedded Images via pypdf, linked where their figure is tagged or else after their page's text; Figure Snapshots of tagged vector figures; Page Snapshots via pypdfium2 at 150 DPI when `--pdf-page-images`, linked straight after each Page Marker; "no text layer found" warning when no page has text; encrypted PDFs reported as skipped-encrypted. (ADR 0003)
   - *DOCX / PPTX* — markitdown's inline data-URI images are replaced by Asset links at the same position (giving inline placement); images missing from markitdown's output are taken from the package's media parts; Charts are read from the package's chart parts.
   - *XLSX* — images and Charts read from the package's drawing and chart parts and linked within the owning sheet's section.
   - *HTML* — local image references copied into Assets and rewritten; remote references left untouched and counted.
@@ -142,7 +142,7 @@ A local converter, built on markitdown, that takes a Target (one file or a folde
   - Encrypted Office files (which are not ZIP packages) are detected and reported as skipped-encrypted.
 - **Chart Reader** — parses a chart XML part into title, chart type and a table of category × series values; on any parse failure returns "data not extracted" with title/type when available. The raw chart XML is always saved as the Chart Definition. If markitdown already emitted a chart table (PPTX), the Chart Reader's output replaces it so all formats look identical. (ADR 0002)
 - **Asset Store** — one per Converted Document. Accepts bytes plus a location hint, dedupes by content hash (identical content → one file, every link points at it), applies `--min-image-size`, keeps the original extension, and generates Asset Names: `p{page:03}-img{n:02}`, `slide{n:02}-img{n:02}` / `slide{n:02}-chart{n:02}`, `sheet-{SheetName}-img{n:02}` / `-chart{n:02}`, `img{n:02}` / `chart{n:02}` for Word. Sheet names are sanitised for file systems. Returns relative links. Flags EMF/WMF Assets for a warning.
-- **Markdown Assembler** — prepends YAML front matter (`source`, `format`, `converted` as ISO 8601, `converter_version`) unless `--no-front-matter`, and lays out per-page/per-sheet sections and Chart blocks:
+- **Markdown Assembler** — prepends YAML front matter (`source`, `format`, `converted` as ISO 8601, `converter_version`) unless `--no-front-matter`, and lays out per-sheet sections, PDF Page Markers and Chart blocks:
   ```
   **Chart: <title> (<type> chart)**
   | <category> | <series 1> | … |
@@ -187,6 +187,7 @@ A local converter, built on markitdown, that takes a Target (one file or a folde
 - Assets from files inside ZIP archives; Outlook MSG attachments.
 - Charts and images in legacy `.xls`.
 - Choosing individual pages for Page Snapshots.
+- The data behind PDF charts; finding figures, and tables without borders, in untagged PDFs; converting PDFs through Word or LibreOffice (ADR 0008).
 - Converting EMF/WMF to PNG (StR-029, a Could — later).
 - Special handling of Word comments and tracked changes.
 - Graphical file picker; parallel conversion; per-file size limits or timeouts; non-English UI.

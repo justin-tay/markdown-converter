@@ -5,8 +5,8 @@
 | **Document** | Stakeholder Requirements Specification (StRS) |
 | **Standard** | Structured after ISO/IEC/IEEE 29148:2018 (Stakeholder Requirements Specification) |
 | **Product** | Markdown Converter |
-| **Version** | 0.1 (Draft) |
-| **Date** | 2026-10-29 |
+| **Version** | 0.2 (Draft) |
+| **Date** | 2026-11-03 |
 | **Status** | For review |
 
 This is the user-facing requirements document for the Markdown Converter. It describes *what* stakeholders need and *why*, in language intended for people to read and approve. It deliberately avoids prescribing *how* the software is built; design detail belongs in a future Software Requirements Specification (SRS) and in the architecture decision records (ADRs).
@@ -29,7 +29,7 @@ Out of scope items are listed in [Section 5](#5-out-of-scope-and-known-limitatio
 
 ### 1.3 Definitions
 
-Domain terms used in this document (**Target**, **Source File**, **Supported Format**, **Converted Document**, **Assets Folder**, **Asset**, **Asset Name**, **Embedded Image**, **Chart**, **Chart Data Table**, **Chart Definition**, **Page Snapshot**, **Name Collision**, **Conversion Run**, **Run Summary**, **Up To Date**, **Setup**, **Offline Bundle**, **Offline Guard**) are defined in the project [GLOSSARY.md](../../GLOSSARY.md). They are capitalised wherever they carry that defined meaning.
+Domain terms used in this document (**Target**, **Source File**, **Supported Format**, **Converted Document**, **Assets Folder**, **Asset**, **Asset Name**, **Embedded Image**, **Chart**, **Chart Data Table**, **Chart Definition**, **Page Snapshot**, **Figure Snapshot**, **Tagged PDF**, **Page Furniture**, **Page Marker**, **Name Collision**, **Conversion Run**, **Run Summary**, **Up To Date**, **Setup**, **Offline Bundle**, **Offline Guard**) are defined in the project [GLOSSARY.md](../../GLOSSARY.md). They are capitalised wherever they carry that defined meaning.
 
 | Abbreviation | Meaning |
 |---|---|
@@ -55,6 +55,7 @@ Domain terms used in this document (**Target**, **Source File**, **Supported For
 | [R8] | [ADR 0005 — Outputs beside sources](../adr/0005-outputs-beside-sources.md) |
 | [R9] | [ADR 0006 — Numbering checked by a developer tool](../adr/0006-numbering-checked-by-a-developer-tool.md) |
 | [R10] | [ADR 0007 — Numbering labels computed, not taken from Word](../adr/0007-numbering-labels-computed-not-taken-from-word.md) |
+| [R11] | [ADR 0008 — PDF structure from tags, not page layout](../adr/0008-pdf-structure-from-tags-not-page-layout.md) |
 
 ### 1.5 Document conventions
 
@@ -137,7 +138,7 @@ The Installer builds an Offline Bundle on an internet-connected machine for the 
 The Data Owner asks for evidence. The Installer runs `convert --selftest-offline`, which shows that network connections are blocked during conversion.
 
 **OS-6 — Capture vector charts in PDFs.**
-A PDF's charts are vector drawings rather than images. The Document User re-runs with `--pdf-page-images`; each page's section in the Converted Document now begins with a link to a picture of the whole page.
+A PDF's charts are vector drawings rather than images. In a Tagged PDF each chart is already captured as a Figure Snapshot where it sits. For an untagged PDF, the Document User re-runs with `--pdf-page-images`; after each Page Marker the Converted Document now links to a picture of the whole page.
 
 **OS-7 — Read-only source share.**
 Source files are on a read-only network share. The Document User runs with `--output D:\converted`; the output folder mirrors the source folder structure and the log file is written there.
@@ -201,8 +202,20 @@ A Source File whose Converted Document is newer than it shall be skipped and rep
 *Acceptance:* A second run on S-16 converts nothing; touching one source converts only that file; `--force` reconverts all and leaves no stale Assets. · *Verify:* T
 
 **StR-014 — Content fidelity** · Must
-Each Converted Document shall contain the Source File's text with its structure (headings, lists, tables) as produced by markitdown, encoded as UTF-8.
+Each Converted Document shall contain the Source File's text with its structure (headings, lists, tables) as produced by markitdown, encoded as UTF-8. For PDFs, structure is recovered as StR-017 describes.
 *Acceptance:* Inspection of S-05, S-06 and S-07 output shows headings, lists and tables preserved; files are valid UTF-8. · *Verify:* I, T
+
+**StR-017 — PDF document structure** · Must
+A PDF's Converted Document shall be one continuous document with the PDF's own headings, paragraphs, lists, tables and links, not one section per page. For a Tagged PDF these shall come from its tags, in the tags' reading order, with heading levels as tagged: list labels (`1.`, `(a)`, `1.2.4.a`) appear as written and bullets as Markdown list items; a table running across pages is one table; the contents list is kept without dot leaders or page numbers; web links are Markdown links and links to other pages of the same PDF are plain text. A PDF whose tags reach less than 80% of its non-furniture text shall instead have its headings and bordered tables recovered from layout: a short line that is wholly bold or larger than body text, at the left margin with space above it, is a heading, with larger text taking higher levels. The log shall say which way each PDF was read. *(ADR 0008)*
+*Acceptance:* S-17's tagged headings, lists, table, contents list and link appear as Markdown with the tagged levels and labels, and there are no `## Page` headings; S-18's bold section titles are headings and its bordered table is a Markdown table. · *Verify:* T
+
+**StR-018 — No Page Furniture** · Must
+A PDF's Page Furniture shall not appear in its Converted Document. In a Tagged PDF it is whatever the tags leave outside the content; otherwise it is a line in the top or bottom 12% of the page whose text, ignoring digits, recurs at the same height on three or more pages, except inside a bordered table. *(ADR 0008)*
+*Acceptance:* S-17's and S-18's headers, footers and page numbers are absent from their output, and S-18's repeated table header row is kept. · *Verify:* T
+
+**StR-019 — Page Markers** · Must
+Each PDF page boundary shall be marked by a Page Marker (`<!-- page 3 -->`) before the first block that starts on that page, so a reader can find the place in the PDF while the marker stays invisible when the Markdown is viewed. A paragraph or table that runs across pages stays whole, with the marker before the next block. *(ADR 0008)*
+*Acceptance:* S-17's output has a Page Marker for each page, and none inside its two-page table. · *Verify:* T
 
 **StR-015 — Source information header** · Should
 Each Converted Document should begin with a short header (YAML front matter) giving the source file name, source format, conversion date and converter version. `--no-front-matter` should turn it off.
@@ -219,11 +232,11 @@ The converter shall save the Embedded Images in PDF, DOCX, PPTX and XLSX files i
 *Acceptance:* Every picture in S-01, S-05, S-06 and S-07 appears in the matching Assets Folder in its original format. · *Verify:* T
 
 **StR-021 — Place image links sensibly** · Must
-Image links shall appear where the image was in Word and PowerPoint documents; after the page's text within that page's section for PDFs; and within the sheet's section for Excel workbooks.
+Image links shall appear where the image was in Word and PowerPoint documents and, for Tagged PDFs, where the image's figure is tagged; after the text of the page the image is on for other PDFs; and within the sheet's section for Excel workbooks.
 *Acceptance:* Inspection of S-01, S-05, S-06 and S-07 output confirms the placement rules. · *Verify:* I
 
 **StR-022 — Meaningful Asset Names** · Must
-Each Asset's name shall say where it came from in the Source File: PDF page (`p003-img01.png`), slide (`slide02-img01.png`, `slide02-chart01.xml`), sheet (`sheet-Sales-chart01.xml`) or document order for Word (`img01.png`).
+Each Asset's name shall say where it came from in the Source File: PDF page (`p003-img01.png`, or `p003-fig01.png` for a Figure Snapshot), slide (`slide02-img01.png`, `slide02-chart01.xml`), sheet (`sheet-Sales-chart01.xml`) or document order for Word (`img01.png`).
 *Acceptance:* Asset names in S-01, S-05, S-06 and S-07 output follow the pattern. · *Verify:* I
 
 **StR-023 — No duplicate images** · Should
@@ -239,8 +252,12 @@ For each Chart in a DOCX, PPTX or XLSX file, the Converted Document shall contai
 *Acceptance:* Every chart in S-05, S-06 and S-07 appears with title, type, table and a working link to its `.xml` file. · *Verify:* T, I
 
 **StR-026 — PDF Page Snapshots** · Should
-With `--pdf-page-images`, every PDF page should be rendered as a 150 DPI PNG Page Snapshot, linked at the top of that page's section. Page Snapshots are off by default.
-*Acceptance:* With the option on S-02, one PNG per page exists and is linked at the start of each page section; without it, none. · *Verify:* T
+With `--pdf-page-images`, every PDF page should be rendered as a 150 DPI PNG Page Snapshot, linked straight after that page's Page Marker. Page Snapshots are off by default.
+*Acceptance:* With the option on S-02, one PNG per page exists and is linked straight after each Page Marker; without it, none. · *Verify:* T
+
+**StR-046 — PDF Figure Snapshots** · Should
+In a Tagged PDF, each figure containing vector drawing or more than one image should be rendered at 150 DPI as one Figure Snapshot of just the figure's area, linked where the figure is tagged with the figure's alternative text. A figure holding a single image and nothing else is saved as that Embedded Image instead. Figures that are mostly text already in the Converted Document (text boxes, callouts), or smaller than `--min-image-size`, are skipped. Figure Snapshots are always on. *(ADR 0008; numbered after StR-045 because StR-020…029 are taken.)*
+*Acceptance:* S-17's vector chart becomes one `p00N-fig01.png` linked at its place with its alternative text; its single-image figure is saved in its original format; its text box produces no picture. · *Verify:* T
 
 **StR-027 — Images in HTML and EPUB** · Should
 Images bundled in an EPUB, and images an HTML file references from the local disk, should be copied into the Assets Folder with links rewritten to them. Images referenced from the web shall be left as text links, never downloaded, and counted in the Run Summary.
@@ -402,6 +419,10 @@ The following are explicitly **Won't** for this version:
 | Outlook MSG attachments | The message body is converted; attachments are not extracted. |
 | Charts and images in legacy `.xls` | Cell data only; resave as `.xlsx` to capture charts. |
 | Choosing individual pages for Page Snapshots | All pages or none. |
+| The data behind charts in PDFs | A PDF stores only the drawing; Figure Snapshots capture the picture (ADR 0008). |
+| Finding figures in untagged PDFs | Loose lines and boxes are too easily mistaken for figures; use Page Snapshots (ADR 0008). |
+| Tables without drawn borders in untagged PDFs | Their text is kept as paragraphs. |
+| Converting PDFs through Word or LibreOffice | Platform-bound or lower quality (ADR 0008). |
 | Word comments and tracked changes | Not specifically handled; current text is converted. |
 | Graphical file picker | The launcher prompts for a typed or pasted path. |
 | Parallel conversion, per-file size limits or timeouts | Files are converted one at a time. |
@@ -444,6 +465,8 @@ The repository includes a Sample Set covering every Supported Format and edge ca
 | S-14 | `report.pdf` and `report.docx` in one folder | StR-011 |
 | S-15 | Damaged DOCX | StR-050, 054 |
 | S-16 | Folder tree containing S-01…S-15 across subfolders, plus a hidden folder, an unsupported file, and a subfolder with spaces and non-ASCII characters in its name | StR-002, 003, 005, 007, 012, 013, 044, 051 |
+| S-17 | Tagged PDF over three pages: running header and footer, page numbers, two heading levels, a contents list, a numbered and a bulleted list, a table running across two pages, a web link, a vector chart figure, a single-image figure and a text box | StR-017, 018, 019, 021, 022, 046 |
+| S-18 | Untagged PDF: a running header, footers whose page numbers change, bold body-size section titles, a larger title, and a bordered table whose header row repeats on its second page | StR-017, 018 |
 
 ---
 
@@ -465,6 +488,9 @@ The repository includes a Sample Set covering every Supported Format and edge ca
 | StR-014 | Must | G1 | | | I, T |
 | StR-015 | Should | G1 | | | T |
 | StR-016 | Must | G1 | | | T |
+| StR-017 | Must | G1 | | 0008 | T |
+| StR-018 | Must | G1 | | 0008 | T |
+| StR-019 | Must | G1 | | 0008 | T |
 | StR-020 | Must | G3 | OS-2 | | T |
 | StR-021 | Must | G3 | OS-2 | | I |
 | StR-022 | Must | G3 | | | I |
@@ -490,6 +516,7 @@ The repository includes a Sample Set covering every Supported Format and edge ca
 | StR-043 | Must | G2 | OS-5 | 0001 | D |
 | StR-044 | Must | G2 | | | T |
 | StR-045 | Should | G2 | | | I, T |
+| StR-046 | Should | G3 | OS-6 | 0008 | T |
 | StR-050 | Must | G5 | OS-1 | | T |
 | StR-051 | Must | G4, G5 | OS-1 | | T |
 | StR-052 | Must | G5 | | | T |

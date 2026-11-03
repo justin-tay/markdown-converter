@@ -46,13 +46,14 @@ class AssetStore:
         self._by_hash: dict[str, str] = {}
         self._counters: dict[tuple[str, str], int] = {}
         self.warnings: list[str] = []
+        self.notes: list[str] = []  # for the log only
         # A run that was interrupted may have left a staging folder behind.
         shutil.rmtree(self._staging, ignore_errors=True)
 
     def add(self, data: bytes, extension: str, location: str = "", kind: str = "img") -> str | None:
         """Save one Asset and return its relative link, or None if it was dropped."""
         extension = extension.lower()
-        if kind == "img" and self._too_small(data, extension):
+        if kind in ("img", "fig") and self._too_small(data, extension):
             return None
         digest = hashlib.sha256(data).hexdigest()
         if digest in self._by_hash:

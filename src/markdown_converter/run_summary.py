@@ -18,6 +18,7 @@ class RunSummary:
         self.converted = self.up_to_date = self.skipped = self.failed = self.ignored = 0
         self._problems: list[str] = []
         self._warnings: list[str] = []
+        self._notes: list[str] = []
 
     def converted_file(self, name: str) -> None:
         self.converted += 1
@@ -39,6 +40,10 @@ class RunSummary:
 
     def warn(self, name: str, message: str) -> None:
         self._warnings.append(f"{name}: {message}")
+
+    def note(self, name: str, message: str) -> None:
+        """Something worth recording in the log but not showing on screen."""
+        self._notes.append(f"{name}: {message}")
 
     def finish(self, log_path: Path) -> bool:
         """Print the Run Summary and write the log. True when every file converted."""
@@ -69,7 +74,8 @@ class RunSummary:
     def _write_log(self, log_path: Path) -> None:
         started = datetime.now(timezone.utc).isoformat(timespec="seconds")
         header = f"Markdown Converter {__version__}, run finished {started}\n\n"
+        notes = ["", "Notes:", *(f"  {note}" for note in self._notes)] if self._notes else []
         try:
-            log_path.write_text(header + "\n".join(self._lines) + "\n", encoding="utf-8")
+            log_path.write_text(header + "\n".join(self._lines + notes) + "\n", encoding="utf-8")
         except OSError as error:
             self._stdout.write(f"\nWarning: could not write the log file {log_path} ({error.strerror or error}).\n")

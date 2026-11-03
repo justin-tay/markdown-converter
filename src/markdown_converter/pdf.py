@@ -1,50 +1,83 @@
-"""PDF Asset Extractor: one section per page, with that page's images after its text."""
+"""PDF Asset Extractor: one continuous document with Page Markers, its structure from tags or layout (ADR 0008).
+
+markitdown's text for PDFs is not used: it has no headings, and it keeps every
+page's header and footer.
+"""
 
 from __future__ import annotations
 
 import io
-import re
 from pathlib import Path
 
+from markdown_converter import pdf_layout, pdf_tags
 from markdown_converter.assets import AssetStore
 from markdown_converter.options import ConversionOptions
 
 SNAPSHOT_DPI = 150
-
-_PAGE_BREAK = "\x0c"  # pdfminer ends every page with a form feed
-
-# A gap between lines wider than this many line heights starts a new paragraph.
-_PARAGRAPH_GAP = 0.6
-# Lines that begin a numbered clause or list item: 1. / 1.2 / 1.2.4.a / (a) / a) / (iv) / bullets.
-_LIST_LIKE_START = re.compile(r"^(\d{1,9})([.)])(?=\s|$)")
-_CLAUSE_LABEL = re.compile(
-    r"^(?:\d+(?:\.\d+)*\.(?:[a-z]\.?)?|\d+(?:\.\d+)+(?:\.[a-z])?\.?|\(?[a-z]{1,4}\)|\(\d+\)|[•▪◦–*-])\s"
-)
 
 # Raw stream extensions for encodings pypdf can't turn into an image file.
 _RAW_EXTENSION_BY_FILTER = {"/JPXDecode": ".jp2", "/JBIG2Decode": ".jb2", "/CCITTFaxDecode": ".ccitt"}
 
 
 def extract(source: Path, markdown: str, store: AssetStore, options: ConversionOptions) -> str:
+    import pdfplumber
     from pypdf import PdfReader
 
     reader = PdfReader(source)
-    texts = _page_texts(markdown, reader, source)
-    if not any(text.strip() for text in texts):
+    structure = pdf_tags.read_structure(reader)
+    figures = _FigureAssets(source, reader, store)
+    try:
+        with pdfplumber.open(source) as document:
+            objects = pdf_tags.page_objects(document)
+            coverage = pdf_tags.tag_coverage(structure, objects) if structure is not None else 0.0
+            if coverage >= pdf_tags.MIN_TAG_COVERAGE:
+                store.notes.append("structure read from its tags")
+                blocks = pdf_tags.blocks(structure, objects, figures)
+                for page_number, image in pdf_tags.furniture_images(objects):
+                    figures.reached(page_number, image["name"])  # a header logo, say: never linked (StR-018)
+            else:
+                store.notes.append("structure read from its layout " + (
+                    "(no tags)" if structure is None else f"(tags reach only {coverage:.0%} of its text)"))
+                blocks = pdf_layout.blocks(document)
+    finally:
+        figures.close()
+    if not any(item["text"].strip() for items in objects.values() for item in items
+               if item["object_type"] == "char"):
         store.warnings.append("no text layer found (scanned pages need OCR, which is out of scope)")
+    blocks = figures.with_leftovers(blocks)
     snapshots = _page_snapshots(source, store) if options.pdf_page_images else {}
-    sections = []
-    for number, (page, text) in enumerate(zip(reader.pages, texts), start=1):
-        location = f"p{number:03d}-"
-        links = _save_page_images(page, store, location)
-        parts = [
-            *([f"![]({snapshots[number]})"] if number in snapshots else []),
-            text.strip(),
-            *(f"![]({link})" for link in links),
-        ]
-        body = "\n\n".join(part for part in parts if part)
-        sections.append(f"## Page {number}\n\n{body}".rstrip())
-    return "\n\n".join(sections) + "\n"
+    return _assemble(blocks, len(reader.pages), snapshots)
+
+
+
+def _assemble(blocks: list[pdf_tags.Block], page_count: int, snapshots: dict[int, str]) -> str:
+    """Join the blocks, with each page's Page Marker before the first block that starts on it (StR-019).
+
+    Every page gets exactly one marker, for its Page Snapshot to follow. A page
+    on which no block starts (one holding only the end of a table, say) gets
+    its marker just before the next page's, or at the end. Where the tags'
+    reading order returns to a page already marked, no second marker is added.
+    """
+    first_blocks = {}
+    for index, block in enumerate(blocks):
+        first_blocks.setdefault(block.page, index)
+    markers_before: dict[int, list[int]] = {}  # block index -> pages marked just before it
+    for page in range(1, page_count + 1):
+        following = next((first_blocks[later] for later in range(page, page_count + 1) if later in first_blocks), None)
+        markers_before.setdefault(following, []).append(page)
+    out: list[str] = []
+
+    def mark(index: int | None) -> None:
+        for page in markers_before.get(index, []):
+            out.append(f"<!-- page {page} -->")
+            if page in snapshots:
+                out.append(f"![]({snapshots[page]})")
+
+    for index, block in enumerate(blocks):
+        mark(index)
+        out.append(block.markdown)
+    mark(None)
+    return "\n\n".join(out) + "\n"
 
 
 def _page_snapshots(source: Path, store: AssetStore) -> dict[int, str]:
@@ -65,87 +98,96 @@ def _page_snapshots(source: Path, store: AssetStore) -> dict[int, str]:
     return links
 
 
-def _page_texts(markdown: str, reader, source: Path) -> list[str]:
-    """Each page's text.
-
-    markitdown's plain-text path (pdfminer) groups text into blocks by column, so
-    a clause label drawn apart from its text ("1.2.4.a" ... "Priority 1") ends
-    up separated from it and out of order. For those PDFs the text is read line
-    by line instead. Pages markitdown recognised as forms keep its table output.
-    """
-    pages = markdown.split(_PAGE_BREAK)
-    if pages and not pages[-1].strip():
-        pages.pop()  # the form feed after the last page
-    if len(pages) == len(reader.pages):
-        lines = _line_texts(source)
-        return lines if len(lines) == len(pages) else pages
-    # markitdown's form-layout path joins pages without breaks: convert singly.
-    from markitdown import StreamInfo
-    from markitdown.converters import PdfConverter
-    from pypdf import PdfWriter
-
-    texts = []
-    for page in reader.pages:
-        writer = PdfWriter()
-        writer.add_page(page)
-        buffer = io.BytesIO()
-        writer.write(buffer)
-        buffer.seek(0)
-        text = PdfConverter().convert(buffer, StreamInfo(extension=".pdf")).markdown
-        texts.append(text.replace(_PAGE_BREAK, ""))
-    return texts
-
-
-def _line_texts(source: Path) -> list[str]:
-    """Each page's text read line by line, grouped into paragraphs."""
-    import pdfplumber
-
-    texts = []
-    try:
-        with pdfplumber.open(source) as document:
-            for page in document.pages:
-                texts.append(_paragraphs(page.extract_text_lines(strip=True)))
-                page.close()
-    except Exception:
-        return []  # fall back to markitdown's text
-    return texts
-
-
-def _paragraphs(lines: list[dict]) -> str:
-    """Join lines into paragraphs: a wide vertical gap or a numbered clause starts a new one."""
-    out, previous = [], None
-    for line in lines:
-        text = line["text"]
-        if not text:
-            continue
-        if previous is not None:
-            height = max(previous["bottom"] - previous["top"], 1)
-            gap = line["top"] - previous["bottom"]
-            new_paragraph = gap > height * _PARAGRAPH_GAP or _CLAUSE_LABEL.match(text)
-            out.append("\n\n" if new_paragraph else "\n")
-        # "3. ..." would be a Markdown list item that viewers renumber; "3\. ..." shows as written.
-        out.append(_LIST_LIKE_START.sub(r"\1\\\2", text))
-        previous = line
-    return "".join(out)
-
-
-def _save_page_images(page, store: AssetStore, location: str) -> list[str]:
+def _save_page_images(page, store: AssetStore, location: str, skip=()) -> list[str]:
     links = []
-    images = page.images
-    for name in images.keys():
-        try:
-            image = images[name]
-            data, extension = image.data, Path(image.name).suffix or ".png"
-        except Exception:
-            data, extension = _raw_image(page, name)
-            if data is None:
-                continue
-            store.warnings.append(f"an image on page {location[1:4].lstrip('0')} uses an encoding "
-                                  f"that can't be converted, so it was saved raw ({extension})")
-        link = store.add(data, extension, location)
+    for name in page.images.keys():
+        if str(name) in skip:  # pypdf names nested images with a list
+            continue
+        link = _save_image(page, name, store, location)
         if link and link not in links:
             links.append(link)
     return links
+
+
+def _save_image(page, name: str, store: AssetStore, location: str) -> str | None:
+    """Save one of the page's Embedded Images under its pypdf name; return its link."""
+    try:
+        image = page.images[name]
+        data, extension = image.data, Path(image.name).suffix or ".png"
+    except Exception:
+        data, extension = _raw_image(page, name)
+        if data is None:
+            return None
+        store.warnings.append(f"an image on page {location[1:4].lstrip('0')} uses an encoding "
+                              f"that can't be converted, so it was saved raw ({extension})")
+    return store.add(data, extension, location)
+
+
+def _last_name(key) -> str:
+    """An image's own XObject name from pypdf's key: "/Im1", or a path such as ["/Fm0", "/Im1"] when nested."""
+    parts = key if isinstance(key, (list, tuple)) else str(key).split("/")
+    return str(parts[-1]).lstrip("/")
+
+
+class _FigureAssets:
+    """A Tagged PDF's figures as Assets: Embedded Images saved as-is (StR-021), or Figure Snapshots (StR-046).
+
+    Images no figure reached are linked at the end of their page afterwards.
+    """
+
+    def __init__(self, source: Path, reader, store: AssetStore):
+        self._source, self._reader, self._store = source, reader, store
+        self._reached: dict[int, set[str]] = {}
+        self._rendering = None
+
+    def link(self, page_number: int, image_name: str) -> str | None:
+        """Save one of the page's Embedded Images and return its link."""
+        name = self.reached(page_number, image_name)
+        if name is None:
+            return None
+        return _save_image(self._reader.pages[page_number - 1], name, self._store, f"p{page_number:03d}-")
+
+    def reached(self, page_number: int, image_name: str):
+        """Record that a figure covers this image, so it isn't linked again at the end of its page."""
+        page = self._reader.pages[page_number - 1]
+        name = next((key for key in page.images.keys() if _last_name(key) == image_name), None)
+        if name is not None:
+            self._reached.setdefault(page_number, set()).add(str(name))
+        return name
+
+    def snapshot(self, page_number: int, bbox: tuple[float, float, float, float]) -> str | None:
+        """Render just `bbox` (PDF user space: x0, y0, x1, y1) of the page as a Figure Snapshot."""
+        import pypdfium2
+
+        if self._rendering is None:
+            self._rendering = pypdfium2.PdfDocument(self._source)
+        page = self._rendering[page_number - 1]
+        try:
+            left, bottom, right, top = page.get_cropbox()
+            x0, y0, x1, y1 = max(bbox[0], left), max(bbox[1], bottom), min(bbox[2], right), min(bbox[3], top)
+            if x1 <= x0 or y1 <= y0:
+                return None
+            image = page.render(scale=SNAPSHOT_DPI / 72, crop=(x0 - left, y0 - bottom, right - x1, top - y1)).to_pil()
+        finally:
+            page.close()
+        buffer = io.BytesIO()
+        image.save(buffer, "PNG")
+        return self._store.add(buffer.getvalue(), ".png", f"p{page_number:03d}-", kind="fig")
+
+    def close(self) -> None:
+        if self._rendering is not None:
+            self._rendering.close()
+
+    def with_leftovers(self, blocks: list[pdf_tags.Block]) -> list[pdf_tags.Block]:
+        """`blocks` with each page's unreached images after the last block of that page."""
+        result = list(blocks)
+        for number, page in enumerate(self._reader.pages, start=1):
+            links = _save_page_images(page, self._store, f"p{number:03d}-", self._reached.get(number, ()))
+            if not links:
+                continue
+            position = max((i + 1 for i, block in enumerate(result) if block.page == number), default=len(result))
+            result[position:position] = [pdf_tags.Block(number, f"![]({link})") for link in links]
+        return result
 
 
 def _raw_image(page, name: str) -> tuple[bytes | None, str]:

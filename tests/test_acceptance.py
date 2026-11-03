@@ -35,7 +35,7 @@ def test_full_library_converts_with_the_expected_outcome_per_sample(run, tmp_pat
         "build_word_with_charts/dashboard.md": "**Chart: Revenue by Quarter (column chart)**",
         "build_slides/results.md": "results_assets/slide01-img01.png",
         "build_slides_with_chart/metrics.md": "metrics_assets/slide02-chart01.xml",
-        "build_pdf_with_images/annual-report.md": "## Page 2",
+        "build_pdf_with_images/annual-report.md": "<!-- page 2 -->",
         "build_pdf_with_vector_chart/sales-chart.md": "sales-chart_assets/p001-page01.png",
         "build_workbook/finance.md": "finance_assets/sheet-Trend-chart01.xml",
         "build_html_with_images/page.md": "page_assets/img01.png",

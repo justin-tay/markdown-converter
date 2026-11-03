@@ -27,7 +27,7 @@ The folder holding every Asset of one Converted Document, named after the Source
 _Avoid_: Media folder, images folder
 
 **Asset**:
-Any file in an Assets Folder that a Converted Document links to: an Embedded Image, a Chart Definition or a Page Snapshot.
+Any file in an Assets Folder that a Converted Document links to: an Embedded Image, a Chart Definition, a Page Snapshot or a Figure Snapshot.
 _Avoid_: Attachment, resource
 
 **Embedded Image**:
@@ -52,6 +52,22 @@ _Avoid_: Image-001, sequential name
 **Page Snapshot**:
 An optional rendered picture of a whole PDF page, used to capture vector graphics that are not Embedded Images.
 _Avoid_: Screenshot, page render
+
+**Figure Snapshot**:
+A rendered picture of just one tagged figure's area of a PDF page, capturing a vector chart or diagram where it sits in the text.
+_Avoid_: Cropped page, figure image
+
+**Tagged PDF**:
+A PDF whose accessibility tags record its headings, paragraphs, lists, tables and figures in reading order; the converter takes a PDF's structure from them when they cover most of its text.
+_Avoid_: Accessible PDF, structured PDF
+
+**Page Furniture**:
+Text repeated on a PDF's pages that is not part of the content: running headers and footers, page numbers and classification lines. It is left out of the Converted Document.
+_Avoid_: Header/footer, boilerplate
+
+**Page Marker**:
+An HTML comment (`<!-- page 3 -->`) in a PDF's Converted Document marking where a page of the PDF begins; invisible when the Markdown is viewed.
+_Avoid_: Page heading, page break
 
 **Name Collision**:
 Two Source Files in the same folder that would produce the same Converted Document name (e.g. `report.pdf` and `report.docx`); both then keep their extension in their output names.
